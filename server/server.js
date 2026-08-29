@@ -121,7 +121,6 @@ app.post('/api/upload', upload.array('files', 10), async (req, res) => {
       } catch (err) {
         console.error(`Error processing ${file.originalname}:`, err.message);
         errors.push({ file: file.originalname, error: err.message });
-        // Clean up failed file
         if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
       }
     }
@@ -131,6 +130,51 @@ app.post('/api/upload', upload.array('files', 10), async (req, res) => {
     console.error('Upload error:', err);
     res.status(500).json({ error: err.message || 'Failed to process documents' });
   }
+});
+
+app.put('/api/documents/:id', (req, res) => {
+  const { id } = req.params;
+  const {
+    estimateDate, supplierName, property, description, keywords,
+    serviceCategory, totalPrice, recurring, billingInterval,
+    intervalAmount, expirationDate, cancellationTerms
+  } = req.body;
+
+  const fields = [];
+  const values = [];
+
+  if (estimateDate !== undefined) { fields.push('estimateDate = ?'); values.push(estimateDate); }
+  if (supplierName !== undefined) { fields.push('supplierName = ?'); values.push(supplierName); }
+  if (property !== undefined) { fields.push('property = ?'); values.push(property); }
+  if (description !== undefined) { fields.push('description = ?'); values.push(description); }
+  if (keywords !== undefined) { fields.push('keywords = ?'); values.push(keywords); }
+  if (serviceCategory !== undefined) { fields.push('serviceCategory = ?'); values.push(serviceCategory); }
+  if (totalPrice !== undefined) { fields.push('totalPrice = ?'); values.push(totalPrice); }
+  if (recurring !== undefined) { fields.push('recurring = ?'); values.push(recurring ? 1 : 0); }
+  if (billingInterval !== undefined) { fields.push('billingInterval = ?'); values.push(billingInterval); }
+  if (intervalAmount !== undefined) { fields.push('intervalAmount = ?'); values.push(intervalAmount); }
+  if (expirationDate !== undefined) { fields.push('expirationDate = ?'); values.push(expirationDate); }
+  if (cancellationTerms !== undefined) { fields.push('cancellationTerms = ?'); values.push(cancellationTerms); }
+
+  if (fields.length === 0) {
+    return res.status(400).json({ error: 'No fields to update' });
+  }
+
+  values.push(id);
+
+  db.run(`UPDATE documents SET ${fields.join(', ')} WHERE id = ?`, values, function(err) {
+    if (err) {
+      console.error('Update error:', err);
+      return res.status(500).json({ error: err.message });
+    }
+    if (this.changes === 0) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+    db.get('SELECT * FROM documents WHERE id = ?', [id], (err, row) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json(row);
+    });
+  });
 });
 
 app.get('/api/documents', (req, res) => {
