@@ -57,29 +57,27 @@ async function extractText(filePath, fileType) {
   return '';
 }
 
-app.post('/api/upload', upload.single('file'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+async function processSingleFile(file) {
+  const rawText = await extractText(file.path, file.mimetype);
+  if (!rawText.trim()) {
+    throw new Error('Could not extract text from document');
+  }
 
-    const rawText = await extractText(req.file.path, req.file.mimetype);
-    if (!rawText.trim()) {
-      return res.status(400).json({ error: 'Could not extract text from document' });
-    }
+  const parsed = await parseDocument(rawText);
+  const id = uuidv4();
+  const now = new Date().toISOString();
 
-    const parsed = await parseDocument(rawText);
-    const id = uuidv4();
-    const now = new Date().toISOString();
+  const keywords = Array.isArray(parsed.keywords) ? parsed.keywords.join(', ') : parsed.keywords;
 
-    const keywords = Array.isArray(parsed.keywords) ? parsed.keywords.join(', ') : parsed.keywords;
-
+  return new Promise((resolve, reject) => {
     db.run(
       `INSERT INTO documents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
-        req.file.filename,
-        req.file.originalname,
-        req.file.path,
-        req.file.mimetype,
+        file.filename,
+        file.originalname,
+        file.path,
+        file.mimetype,
         now,
         parsed.estimateDate || null,
         parsed.supplierName || null,
@@ -98,14 +96,40 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       function(err) {
         if (err) {
           console.error('DB error:', err);
-          return res.status(500).json({ error: 'Failed to save document' });
+          reject(new Error('Failed to save document'));
+        } else {
+          resolve({ id, ...parsed, uploadedAt: now, originalName: file.originalname });
         }
-        res.json({ id, ...parsed, uploadedAt: now, rawText: undefined });
       }
     );
+  });
+}
+
+app.post('/api/upload', upload.array('files', 10), async (req, res) => {
+  try {
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: 'No files uploaded' });
+    }
+
+    const results = [];
+    const errors = [];
+
+    for (const file of req.files) {
+      try {
+        const result = await processSingleFile(file);
+        results.push({ success: true, ...result });
+      } catch (err) {
+        console.error(`Error processing ${file.originalname}:`, err.message);
+        errors.push({ file: file.originalname, error: err.message });
+        // Clean up failed file
+        if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+      }
+    }
+
+    res.json({ results, errors, totalProcessed: results.length, totalFailed: errors.length });
   } catch (err) {
     console.error('Upload error:', err);
-    res.status(500).json({ error: err.message || 'Failed to process document' });
+    res.status(500).json({ error: err.message || 'Failed to process documents' });
   }
 });
 

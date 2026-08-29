@@ -1,10 +1,10 @@
 import React, { useState, useRef } from 'react';
-import { X, Upload, FileText, Loader } from 'lucide-react';
+import { X, Upload, FileText, Loader, Trash2 } from 'lucide-react';
 
 const API_URL = '/api';
 
 export default function UploadModal({ onClose, onSuccess }) {
-  const [file, setFile] = useState(null);
+  const [files, setFiles] = useState([]);
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
@@ -13,31 +13,38 @@ export default function UploadModal({ onClose, onSuccess }) {
   const handleDrop = (e) => {
     e.preventDefault();
     setDragOver(false);
-    const f = e.dataTransfer.files[0];
-    if (f) validateFile(f);
+    const dropped = Array.from(e.dataTransfer.files);
+    validateAndAdd(dropped);
   };
 
-  const validateFile = (f) => {
+  const validateAndAdd = (newFiles) => {
     const allowed = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
-    if (!allowed.includes(f.type)) {
-      setError('Only PDF, JPG, and PNG files are allowed');
-      return;
+    const valid = newFiles.filter(f => {
+      if (!allowed.includes(f.type)) return false;
+      if (f.size > 20 * 1024 * 1024) return false;
+      return true;
+    });
+
+    if (valid.length < newFiles.length) {
+      setError('Some files were skipped (only PDF, JPG, PNG under 20MB allowed)');
+    } else {
+      setError('');
     }
-    if (f.size > 20 * 1024 * 1024) {
-      setError('File size must be under 20MB');
-      return;
-    }
-    setFile(f);
-    setError('');
+
+    setFiles(prev => [...prev, ...valid.map(f => ({ file: f, id: Math.random().toString(36).slice(2) }))]);
+  };
+
+  const removeFile = (id) => {
+    setFiles(prev => prev.filter(f => f.id !== id));
   };
 
   const handleSubmit = async () => {
-    if (!file) return;
+    if (files.length === 0) return;
     setUploading(true);
     setError('');
 
     const formData = new FormData();
-    formData.append('file', file);
+    files.forEach(f => formData.append('files', f.file));
 
     try {
       const res = await fetch(`${API_URL}/upload`, {
@@ -46,24 +53,33 @@ export default function UploadModal({ onClose, onSuccess }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Upload failed');
-      onSuccess();
+      
+      if (data.totalProcessed > 0) {
+        onSuccess();
+      } else {
+        setError('No files were successfully processed. Check console for details.');
+        setUploading(false);
+      }
     } catch (err) {
       setError(err.message);
       setUploading(false);
     }
   };
 
+  const totalSize = files.reduce((sum, f) => sum + f.file.size, 0);
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div
         onClick={e => e.stopPropagation()}
         style={{
-          background: 'white', borderRadius: 'var(--radius)', maxWidth: 520, width: '100%',
-          padding: 32, animation: 'slideUp 0.3s ease', boxShadow: '0 20px 60px rgba(0,0,0,0.2)'
+          background: 'white', borderRadius: 'var(--radius)', maxWidth: 600, width: '100%',
+          maxHeight: '90vh', overflow: 'auto', padding: 32, animation: 'slideUp 0.3s ease',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.2)'
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-          <h2 style={{ fontSize: 22 }}>Upload Document</h2>
+          <h2 style={{ fontSize: 22 }}>Upload Documents</h2>
           <button onClick={onClose} style={{ border: 'none', background: 'transparent', cursor: 'pointer' }}>
             <X size={24} color="var(--text-muted)" />
           </button>
@@ -81,25 +97,48 @@ export default function UploadModal({ onClose, onSuccess }) {
             cursor: 'pointer', transition: 'all 0.2s'
           }}
         >
-          <input ref={inputRef} type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display: 'none' }} onChange={e => validateFile(e.target.files[0])} />
+          <input 
+            ref={inputRef} 
+            type="file" 
+            accept=".pdf,.jpg,.jpeg,.png" 
+            multiple
+            style={{ display: 'none' }} 
+            onChange={e => validateAndAdd(Array.from(e.target.files))} 
+          />
           <Upload size={40} color="var(--amber)" style={{ marginBottom: 12 }} />
-          <p style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Drop your file here or click to browse</p>
-          <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>PDF, JPG, or PNG up to 20MB</p>
+          <p style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Drop files here or click to browse</p>
+          <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>PDF, JPG, or PNG up to 20MB each</p>
         </div>
 
-        {file && (
-          <div style={{
-            marginTop: 16, padding: 12, background: 'var(--warm-white)', borderRadius: 'var(--radius)',
-            display: 'flex', alignItems: 'center', gap: 12
-          }}>
-            <FileText size={20} color="var(--amber)" />
-            <div style={{ flex: 1 }}>
-              <p style={{ fontSize: 14, fontWeight: 600 }}>{file.name}</p>
-              <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+        {files.length > 0 && (
+          <div style={{ marginTop: 20 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <p style={{ fontSize: 14, fontWeight: 600 }}>{files.length} file{files.length !== 1 ? 's' : ''} selected</p>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>{(totalSize / 1024 / 1024).toFixed(2)} MB total</p>
             </div>
-            <button onClick={() => setFile(null)} style={{ border: 'none', background: 'transparent', cursor: 'pointer' }}>
-              <X size={16} color="var(--text-muted)" />
-            </button>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {files.map(f => (
+                <div key={f.id} style={{
+                  padding: 10, background: 'var(--warm-white)', borderRadius: 'var(--radius)',
+                  display: 'flex', alignItems: 'center', gap: 10, border: '1px solid var(--border)'
+                }}>
+                  <FileText size={18} color="var(--amber)" />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {f.file.name}
+                    </p>
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>{(f.file.size / 1024 / 1024).toFixed(2)} MB</p>
+                  </div>
+                  <button 
+                    onClick={() => removeFile(f.id)} 
+                    disabled={uploading}
+                    style={{ border: 'none', background: 'transparent', cursor: uploading ? 'not-allowed' : 'pointer', padding: 4 }}
+                  >
+                    <Trash2 size={16} color="var(--danger)" />
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
@@ -109,15 +148,16 @@ export default function UploadModal({ onClose, onSuccess }) {
 
         <button
           onClick={handleSubmit}
-          disabled={!file || uploading}
+          disabled={files.length === 0 || uploading}
           style={{
-            marginTop: 24, width: '100%', padding: '12px', background: (!file || uploading) ? 'var(--border)' : 'var(--charcoal)',
+            marginTop: 24, width: '100%', padding: '12px', 
+            background: (files.length === 0 || uploading) ? 'var(--border)' : 'var(--charcoal)',
             color: 'white', border: 'none', borderRadius: 'var(--radius)', fontSize: 15, fontWeight: 600,
-            cursor: (!file || uploading) ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center',
-            justifyContent: 'center', gap: 8
+            cursor: (files.length === 0 || uploading) ? 'not-allowed' : 'pointer', 
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8
           }}
         >
-          {uploading ? <><Loader size={18} className="spin" /> Processing with AI...</> : 'Upload & Parse'}
+          {uploading ? <><Loader size={18} className="spin" /> Processing {files.length} file{files.length !== 1 ? 's' : ''} with AI...</> : `Upload & Parse ${files.length} File${files.length !== 1 ? 's' : ''}`}
         </button>
       </div>
     </div>
