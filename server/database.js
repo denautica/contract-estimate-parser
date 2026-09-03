@@ -28,9 +28,17 @@ db.serialize(() => {
       intervalAmount REAL,
       expirationDate TEXT,
       cancellationTerms TEXT,
-      rawText TEXT
+      rawText TEXT,
+      projectNickname TEXT,
+      isActive INTEGER DEFAULT 1,
+      supersededById TEXT
     )
   `);
+
+  // Migrate existing tables: silently ignore errors if columns already exist
+  db.run(`ALTER TABLE documents ADD COLUMN projectNickname TEXT`, () => {});
+  db.run(`ALTER TABLE documents ADD COLUMN isActive INTEGER DEFAULT 1`, () => {});
+  db.run(`ALTER TABLE documents ADD COLUMN supersededById TEXT`, () => {});
 });
 
 module.exports = db;

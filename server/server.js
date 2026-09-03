@@ -30,7 +30,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 20 * 1024 * 1024 },
+  limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowed = ['.pdf', '.jpg', '.jpeg', '.png'];
     const ext = path.extname(file.originalname).toLowerCase();
@@ -43,7 +43,6 @@ app.use('/uploads', express.static(uploadsDir));
 
 async function extractText(filePath, fileType) {
   const ext = path.extname(filePath).toLowerCase();
-  
   if (ext === '.pdf') {
     const buffer = fs.readFileSync(filePath);
     const data = await pdfParse(buffer);
@@ -57,7 +56,7 @@ async function extractText(filePath, fileType) {
   return '';
 }
 
-async function processSingleFile(file) {
+async function processSingleFile(file, batchOptions = {}) {
   const rawText = await extractText(file.path, file.mimetype);
   if (!rawText.trim()) {
     throw new Error('Could not extract text from document');
@@ -66,57 +65,59 @@ async function processSingleFile(file) {
   const parsed = await parseDocument(rawText);
   const id = uuidv4();
   const now = new Date().toISOString();
-
   const keywords = Array.isArray(parsed.keywords) ? parsed.keywords.join(', ') : parsed.keywords;
+
+  const projectNickname = batchOptions.projectNickname || null;
+  const isActive = batchOptions.isActive !== undefined ? (batchOptions.isActive ? 1 : 0) : 1;
+  const supersededById = null;
 
   return new Promise((resolve, reject) => {
     db.run(
-      `INSERT INTO documents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO documents (
+        id, filename, originalName, filePath, fileType, uploadedAt,
+        estimateDate, supplierName, property, description, keywords,
+        serviceCategory, totalPrice, recurring, billingInterval, intervalAmount,
+        expirationDate, cancellationTerms, rawText,
+        projectNickname, isActive, supersededById
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        id,
-        file.filename,
-        file.originalname,
-        file.path,
-        file.mimetype,
-        now,
-        parsed.estimateDate || null,
-        parsed.supplierName || null,
-        parsed.property || 'Other',
-        parsed.description || null,
-        keywords || null,
-        parsed.serviceCategory || null,
-        parsed.totalPrice || null,
-        parsed.recurring ? 1 : 0,
-        parsed.billingInterval || null,
-        parsed.intervalAmount || null,
-        parsed.expirationDate || null,
-        parsed.cancellationTerms || null,
-        rawText
+        id, file.filename, file.originalname, file.path, file.mimetype, now,
+        parsed.estimateDate || null, parsed.supplierName || null, parsed.property || 'Other',
+        parsed.description || null, keywords || null, parsed.serviceCategory || null,
+        parsed.totalPrice || null, parsed.recurring ? 1 : 0, parsed.billingInterval || null,
+        parsed.intervalAmount || null, parsed.expirationDate || null,
+        parsed.cancellationTerms || null, rawText,
+        projectNickname, isActive, supersededById
       ],
       function(err) {
         if (err) {
           console.error('DB error:', err);
           reject(new Error('Failed to save document'));
         } else {
-          resolve({ id, ...parsed, uploadedAt: now, originalName: file.originalname });
+          resolve({ id, ...parsed, uploadedAt: now, originalName: file.originalname, projectNickname, isActive, supersededById });
         }
       }
     );
   });
 }
 
-app.post('/api/upload', upload.array('files', 10), async (req, res) => {
+app.post('/api/upload', upload.array('files', 50), async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'No files uploaded' });
     }
+
+    const batchOptions = {
+      projectNickname: req.body.projectNickname || null,
+      isActive: req.body.isActive !== 'false'
+    };
 
     const results = [];
     const errors = [];
 
     for (const file of req.files) {
       try {
-        const result = await processSingleFile(file);
+        const result = await processSingleFile(file, batchOptions);
         results.push({ success: true, ...result });
       } catch (err) {
         console.error(`Error processing ${file.originalname}:`, err.message);
@@ -137,7 +138,8 @@ app.put('/api/documents/:id', (req, res) => {
   const {
     estimateDate, supplierName, property, description, keywords,
     serviceCategory, totalPrice, recurring, billingInterval,
-    intervalAmount, expirationDate, cancellationTerms
+    intervalAmount, expirationDate, cancellationTerms,
+    projectNickname, isActive, supersededById
   } = req.body;
 
   const fields = [];
@@ -155,6 +157,9 @@ app.put('/api/documents/:id', (req, res) => {
   if (intervalAmount !== undefined) { fields.push('intervalAmount = ?'); values.push(intervalAmount); }
   if (expirationDate !== undefined) { fields.push('expirationDate = ?'); values.push(expirationDate); }
   if (cancellationTerms !== undefined) { fields.push('cancellationTerms = ?'); values.push(cancellationTerms); }
+  if (projectNickname !== undefined) { fields.push('projectNickname = ?'); values.push(projectNickname); }
+  if (isActive !== undefined) { fields.push('isActive = ?'); values.push(isActive ? 1 : 0); }
+  if (supersededById !== undefined) { fields.push('supersededById = ?'); values.push(supersededById || null); }
 
   if (fields.length === 0) {
     return res.status(400).json({ error: 'No fields to update' });
@@ -172,23 +177,32 @@ app.put('/api/documents/:id', (req, res) => {
     }
     db.get('SELECT * FROM documents WHERE id = ?', [id], (err, row) => {
       if (err) return res.status(500).json({ error: err.message });
-      res.json(row);
+      if (row && row.supersededById) {
+        db.get('SELECT id, originalName, projectNickname FROM documents WHERE id = ?', [row.supersededById], (err, supRow) => {
+          if (err) return res.status(500).json({ error: err.message });
+          row.supersededBy = supRow || null;
+          res.json(row);
+        });
+      } else {
+        row.supersededBy = null;
+        res.json(row);
+      }
     });
   });
 });
 
 app.get('/api/documents', (req, res) => {
-  const { search, property, serviceCategory, recurring, supplierName } = req.query;
+  const { search, property, serviceCategory, recurring, supplierName, isActive } = req.query;
   let sql = 'SELECT * FROM documents WHERE 1=1';
   const params = [];
 
   if (search) {
     sql += ` AND (
       originalName LIKE ? OR supplierName LIKE ? OR description LIKE ? OR 
-      keywords LIKE ? OR serviceCategory LIKE ? OR rawText LIKE ?
+      keywords LIKE ? OR serviceCategory LIKE ? OR rawText LIKE ? OR projectNickname LIKE ?
     )`;
     const like = `%${search}%`;
-    params.push(like, like, like, like, like, like);
+    params.push(like, like, like, like, like, like, like);
   }
   if (property) {
     sql += ' AND property = ?';
@@ -206,6 +220,13 @@ app.get('/api/documents', (req, res) => {
     sql += ' AND supplierName LIKE ?';
     params.push(`%${supplierName}%`);
   }
+  if (isActive !== undefined) {
+    if (isActive === 'true') {
+      sql += ' AND (isActive = 1 OR isActive IS NULL)';
+    } else {
+      sql += ' AND isActive = 0';
+    }
+  }
 
   sql += ' ORDER BY uploadedAt DESC';
 
@@ -219,7 +240,24 @@ app.get('/api/documents/:id', (req, res) => {
   db.get('SELECT * FROM documents WHERE id = ?', [req.params.id], (err, row) => {
     if (err) return res.status(500).json({ error: err.message });
     if (!row) return res.status(404).json({ error: 'Document not found' });
-    res.json(row);
+    
+    if (row.supersededById) {
+      db.get('SELECT id, originalName, projectNickname FROM documents WHERE id = ?', [row.supersededById], (err, supRow) => {
+        if (err) return res.status(500).json({ error: err.message });
+        row.supersededBy = supRow || null;
+        res.json(row);
+      });
+    } else {
+      row.supersededBy = null;
+      res.json(row);
+    }
+  });
+});
+
+app.get('/api/documents/:id/supersedes', (req, res) => {
+  db.all('SELECT id, originalName, projectNickname, uploadedAt, supplierName FROM documents WHERE supersededById = ?', [req.params.id], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
   });
 });
 
@@ -257,17 +295,20 @@ app.get('/api/stats', (req, res) => {
       if (err) return res.status(500).json({ error: err.message });
       db.get('SELECT COUNT(*) as total FROM documents', [], (err, count) => {
         if (err) return res.status(500).json({ error: err.message });
-        res.json({
-          totalDocuments: count.total,
-          properties: properties.map(p => p.property),
-          serviceCategories: categories.map(c => c.serviceCategory)
+        db.get('SELECT COUNT(*) as active FROM documents WHERE isActive = 1 OR isActive IS NULL', [], (err, activeCount) => {
+          if (err) return res.status(500).json({ error: err.message });
+          res.json({
+            totalDocuments: count.total,
+            activeDocuments: activeCount.active,
+            properties: properties.map(p => p.property),
+            serviceCategories: categories.map(c => c.serviceCategory)
+          });
         });
       });
     });
   });
 });
 
-// Serve static frontend in production
 const clientDist = path.join(__dirname, '..', 'client', 'dist');
 if (fs.existsSync(clientDist)) {
   app.use(express.static(clientDist));

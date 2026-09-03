@@ -1,16 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { X, FileText, Building2, DollarSign, Calendar, Tag, Repeat, AlertCircle, ExternalLink, Pencil, Save, XCircle, Eye, EyeOff, Maximize2 } from 'lucide-react';
+import { X, FileText, Building2, DollarSign, Calendar, Tag, Repeat, AlertCircle, ExternalLink, Pencil, Save, XCircle, Eye, EyeOff, Maximize2, ArrowRight, Layers, Activity } from 'lucide-react';
 
 const API_URL = '/api';
 const PROPS = ['Canyon View', 'Rockpoint', 'Boulder Canyon', 'Other'];
 
-export default function DocumentDetail({ doc, onClose, formatCurrency, formatDate }) {
+export default function DocumentDetail({ doc, onClose, onSelect, formatCurrency, formatDate }) {
   const [isEditing, setIsEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [localDoc, setLocalDoc] = useState(doc);
   const [editForm, setEditForm] = useState({});
   const [error, setError] = useState('');
   const [previewExpanded, setPreviewExpanded] = useState(false);
+  const [allDocs, setAllDocs] = useState([]);
+  const [supersedes, setSupersedes] = useState([]);
 
   useEffect(() => {
     setLocalDoc(doc);
@@ -26,11 +28,21 @@ export default function DocumentDetail({ doc, onClose, formatCurrency, formatDat
       billingInterval: doc.billingInterval || '',
       intervalAmount: doc.intervalAmount !== null && doc.intervalAmount !== undefined ? doc.intervalAmount : '',
       expirationDate: doc.expirationDate || '',
-      cancellationTerms: doc.cancellationTerms || ''
+      cancellationTerms: doc.cancellationTerms || '',
+      projectNickname: doc.projectNickname || '',
+      isActive: doc.isActive !== 0,
+      supersededById: doc.supersededById || ''
     });
     setIsEditing(false);
     setError('');
   }, [doc]);
+
+  useEffect(() => {
+    fetch(`${API_URL}/documents`).then(r => r.json()).then(data => {
+      setAllDocs(data.filter(d => d.id !== doc.id));
+    });
+    fetch(`${API_URL}/documents/${doc.id}/supersedes`).then(r => r.json()).then(setSupersedes);
+  }, [doc.id]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -40,7 +52,9 @@ export default function DocumentDetail({ doc, onClose, formatCurrency, formatDat
         ...editForm,
         totalPrice: editForm.totalPrice === '' ? null : parseFloat(editForm.totalPrice),
         intervalAmount: editForm.intervalAmount === '' ? null : parseFloat(editForm.intervalAmount),
-        recurring: editForm.recurring
+        recurring: editForm.recurring,
+        isActive: editForm.isActive,
+        supersededById: editForm.supersededById || null
       };
       const res = await fetch(`${API_URL}/documents/${doc.id}`, {
         method: 'PUT',
@@ -51,6 +65,7 @@ export default function DocumentDetail({ doc, onClose, formatCurrency, formatDat
       if (!res.ok) throw new Error(data.error || 'Failed to save');
       setLocalDoc(data);
       setIsEditing(false);
+      fetch(`${API_URL}/documents/${doc.id}/supersedes`).then(r => r.json()).then(setSupersedes);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -73,7 +88,10 @@ export default function DocumentDetail({ doc, onClose, formatCurrency, formatDat
       billingInterval: localDoc.billingInterval || '',
       intervalAmount: localDoc.intervalAmount !== null && localDoc.intervalAmount !== undefined ? localDoc.intervalAmount : '',
       expirationDate: localDoc.expirationDate || '',
-      cancellationTerms: localDoc.cancellationTerms || ''
+      cancellationTerms: localDoc.cancellationTerms || '',
+      projectNickname: localDoc.projectNickname || '',
+      isActive: localDoc.isActive !== 0,
+      supersededById: localDoc.supersededById || ''
     });
   };
 
@@ -143,10 +161,25 @@ export default function DocumentDetail({ doc, onClose, formatCurrency, formatDat
                   padding: '2px 10px', borderRadius: 12, background: 'var(--amber-light)', color: 'var(--charcoal)'
                 }}>Recurring</span>
               )}
+              {localDoc.isActive === 0 && (
+                <span style={{
+                  fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em',
+                  padding: '2px 10px', borderRadius: 12, background: '#f0e0e0', color: '#5a2d2d'
+                }}>Inactive</span>
+              )}
+              {localDoc.supersededById && (
+                <span style={{
+                  fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em',
+                  padding: '2px 10px', borderRadius: 12, background: '#f0e8e0', color: '#5a3d2d'
+                }}>Superseded</span>
+              )}
             </div>
             <h2 style={{ fontSize: 20, marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={localDoc.originalName}>
-              {localDoc.originalName}
+              {localDoc.projectNickname || localDoc.originalName}
             </h2>
+            {localDoc.projectNickname && (
+              <p style={{ fontSize: 13, color: 'var(--text-muted)', fontStyle: 'italic', marginBottom: 2 }}>{localDoc.originalName}</p>
+            )}
             <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Uploaded {formatDate(localDoc.uploadedAt)}</p>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }} className="no-print">
@@ -279,6 +312,63 @@ export default function DocumentDetail({ doc, onClose, formatCurrency, formatDat
             padding: '24px 28px',
             transition: 'width 0.3s ease'
           }}>
+            {/* Superseded Banner */}
+            {localDoc.supersededBy && (
+              <div style={{
+                padding: 14, borderRadius: 'var(--radius)', background: '#f0e8e0', border: '1px solid #e0d0c0',
+                marginBottom: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12
+              }}>
+                <div>
+                  <p style={{ fontSize: 12, fontWeight: 600, color: '#5a3d2d', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>
+                    <AlertCircle size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 4 }} />
+                    This contract has been superseded
+                  </p>
+                  <p style={{ fontSize: 14, color: 'var(--charcoal)' }}>
+                    Current version: <strong>{localDoc.supersededBy.projectNickname || localDoc.supersededBy.originalName}</strong>
+                  </p>
+                </div>
+                <button
+                  onClick={() => onSelect && onSelect(localDoc.supersededBy)}
+                  style={{
+                    padding: '6px 12px', background: 'white', border: '1px solid #d0c0b0',
+                    borderRadius: 'var(--radius)', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                    color: '#5a3d2d', display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0
+                  }}
+                >
+                  View Current <ArrowRight size={14} />
+                </button>
+              </div>
+            )}
+
+            {/* Supersedes List */}
+            {supersedes.length > 0 && (
+              <div style={{ marginBottom: 20 }}>
+                <h3 style={{
+                  fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em',
+                  color: 'var(--charcoal)', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6
+                }}>
+                  <Layers size={14} color="var(--amber)" /> This Contract Supersedes
+                </h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {supersedes.map(s => (
+                    <button
+                      key={s.id}
+                      onClick={() => onSelect && onSelect(s)}
+                      style={{
+                        textAlign: 'left', padding: 10, borderRadius: 'var(--radius)',
+                        background: 'var(--warm-white)', border: '1px solid var(--border)',
+                        cursor: 'pointer', fontSize: 14, color: 'var(--charcoal)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between'
+                      }}
+                    >
+                      <span>{s.projectNickname || s.originalName} <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>({s.supplierName})</span></span>
+                      <ArrowRight size={14} color="var(--amber)" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div style={{ marginBottom: 24 }}>
               <h3 style={{
                 fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em',
@@ -338,6 +428,16 @@ export default function DocumentDetail({ doc, onClose, formatCurrency, formatDat
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               {isEditing ? (
                 <>
+                  <div>
+                    <label style={labelStyle}>Project Nickname</label>
+                    <input
+                      type="text"
+                      value={editForm.projectNickname}
+                      onChange={e => setEditForm(f => ({ ...f, projectNickname: e.target.value }))}
+                      placeholder="e.g., HVAC Replacement 2024"
+                      style={inputStyle}
+                    />
+                  </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                     <div>
                       <label style={labelStyle}>Estimate Date</label>
@@ -366,26 +466,53 @@ export default function DocumentDetail({ doc, onClose, formatCurrency, formatDat
                       <input type="number" step="0.01" value={editForm.totalPrice} onChange={e => setEditForm(f => ({ ...f, totalPrice: e.target.value }))} style={inputStyle} />
                     </div>
                     <div>
+                      <label style={labelStyle}>Active</label>
+                      <select value={editForm.isActive ? 'yes' : 'no'} onChange={e => setEditForm(f => ({ ...f, isActive: e.target.value === 'yes' }))} style={inputStyle}>
+                        <option value="yes">Active</option>
+                        <option value="no">Inactive</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    <div>
                       <label style={labelStyle}>Recurring</label>
                       <select value={editForm.recurring ? 'yes' : 'no'} onChange={e => setEditForm(f => ({ ...f, recurring: e.target.value === 'yes' }))} style={inputStyle}>
                         <option value="yes">Yes</option>
                         <option value="no">No</option>
                       </select>
                     </div>
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                     <div>
                       <label style={labelStyle}>Billing Interval</label>
                       <input type="text" value={editForm.billingInterval} onChange={e => setEditForm(f => ({ ...f, billingInterval: e.target.value }))} style={inputStyle} placeholder="e.g., Monthly, Annual" />
                     </div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                     <div>
                       <label style={labelStyle}>Interval Amount</label>
                       <input type="number" step="0.01" value={editForm.intervalAmount} onChange={e => setEditForm(f => ({ ...f, intervalAmount: e.target.value }))} style={inputStyle} />
                     </div>
+                    <div>
+                      <label style={labelStyle}>Expiration Date</label>
+                      <input type="date" value={editForm.expirationDate} onChange={e => setEditForm(f => ({ ...f, expirationDate: e.target.value }))} style={inputStyle} />
+                    </div>
                   </div>
                   <div>
-                    <label style={labelStyle}>Expiration Date</label>
-                    <input type="date" value={editForm.expirationDate} onChange={e => setEditForm(f => ({ ...f, expirationDate: e.target.value }))} style={inputStyle} />
+                    <label style={labelStyle}>Superseded By</label>
+                    <select
+                      value={editForm.supersededById || ''}
+                      onChange={e => setEditForm(f => ({ ...f, supersededById: e.target.value }))}
+                      style={inputStyle}
+                    >
+                      <option value="">None (current contract)</option>
+                      {allDocs.map(d => (
+                        <option key={d.id} value={d.id}>
+                          {d.projectNickname || d.originalName} ({d.supplierName || 'Unknown'})
+                        </option>
+                      ))}
+                    </select>
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                      Select the newer contract that replaces this one.
+                    </p>
                   </div>
                   <div>
                     <label style={labelStyle}>Cancellation Terms</label>
@@ -399,6 +526,7 @@ export default function DocumentDetail({ doc, onClose, formatCurrency, formatDat
                 </>
               ) : (
                 <>
+                  <DetailRow icon={FileText} label="Project Nickname" value={localDoc.projectNickname} />
                   <DetailRow icon={Calendar} label="Estimate Date" value={formatDate(localDoc.estimateDate)} />
                   <DetailRow icon={Building2} label="Supplier Name" value={localDoc.supplierName} />
                   <DetailRow icon={Tag} label="Service Category" value={localDoc.serviceCategory} />
@@ -413,6 +541,7 @@ export default function DocumentDetail({ doc, onClose, formatCurrency, formatDat
                       {formatCurrency(localDoc.totalPrice) || '—'}
                     </p>
                   </div>
+                  <DetailRow icon={Activity} label="Status" value={localDoc.isActive === 0 ? 'Inactive' : 'Active'} highlight={localDoc.isActive === 0} />
                   <DetailRow icon={Repeat} label="Recurring" value={localDoc.recurring === 1 ? 'Yes' : 'No'} />
                   <DetailRow icon={Calendar} label="Billing Interval" value={localDoc.billingInterval || '—'} />
                   <DetailRow icon={DollarSign} label="Interval Amount" value={formatCurrency(localDoc.intervalAmount)} />
@@ -428,19 +557,19 @@ export default function DocumentDetail({ doc, onClose, formatCurrency, formatDat
   );
 }
 
-function DetailRow({ icon: Icon, label, value }) {
+function DetailRow({ icon: Icon, label, value, highlight }) {
   return (
     <div style={{
       padding: '10px 12px',
       borderRadius: 'var(--radius)',
-      background: 'transparent',
-      border: '1px solid transparent'
+      background: highlight ? '#fff8f0' : 'transparent',
+      border: highlight ? '1px solid var(--border)' : '1px solid transparent'
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
         <Icon size={14} color="var(--amber)" />
         <span style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>{label}</span>
       </div>
-      <p style={{ fontSize: 14, fontWeight: 500, color: 'var(--charcoal)' }}>
+      <p style={{ fontSize: 14, fontWeight: 500, color: highlight ? 'var(--danger)' : 'var(--charcoal)' }}>
         {value || '—'}
       </p>
     </div>

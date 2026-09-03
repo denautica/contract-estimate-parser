@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { FileText, Upload, Search, Filter, BarChart3, Trash2, Eye, CheckSquare, Square, X } from 'lucide-react';
+import { FileText, Upload, Search, Filter, BarChart3, Trash2, Eye, CheckSquare, Square, X, Activity, ArrowRight } from 'lucide-react';
 import UploadModal from './components/UploadModal';
 import DocumentDetail from './components/DocumentDetail';
 import CompareView from './components/CompareView';
@@ -8,10 +8,10 @@ const API_URL = '/api';
 
 export default function App() {
   const [documents, setDocuments] = useState([]);
-  const [stats, setStats] = useState({ totalDocuments: 0, properties: [], serviceCategories: [] });
+  const [stats, setStats] = useState({ totalDocuments: 0, activeDocuments: 0, properties: [], serviceCategories: [] });
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [filters, setFilters] = useState({ property: '', serviceCategory: '', recurring: '' });
+  const [filters, setFilters] = useState({ property: '', serviceCategory: '', recurring: '', isActive: '' });
   const [selectedDocs, setSelectedDocs] = useState(new Set());
   const [showUpload, setShowUpload] = useState(false);
   const [detailDoc, setDetailDoc] = useState(null);
@@ -24,6 +24,7 @@ export default function App() {
     if (filters.property) params.append('property', filters.property);
     if (filters.serviceCategory) params.append('serviceCategory', filters.serviceCategory);
     if (filters.recurring) params.append('recurring', filters.recurring === 'yes' ? 'true' : 'false');
+    if (filters.isActive) params.append('isActive', filters.isActive === 'yes' ? 'true' : 'false');
     
     const res = await fetch(`${API_URL}/documents?${params}`);
     const data = await res.json();
@@ -104,7 +105,9 @@ export default function App() {
           </div>
           <div>
             <h1 style={{ fontSize: 22, letterSpacing: '-0.02em', lineHeight: 1.2 }}>Contract & Estimate Parser</h1>
-            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{stats.totalDocuments} documents uploaded</p>
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+              {stats.activeDocuments} active / {stats.totalDocuments} total documents
+            </p>
           </div>
         </div>
 
@@ -178,7 +181,20 @@ export default function App() {
               </select>
             </div>
 
-            <button onClick={() => setFilters({ property: '', serviceCategory: '', recurring: '' })} style={{
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Status</label>
+              <select
+                value={filters.isActive}
+                onChange={e => setFilters(f => ({ ...f, isActive: e.target.value }))}
+                style={{ width: '100%', marginTop: 6, padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 14, background: 'white' }}
+              >
+                <option value="">All</option>
+                <option value="yes">Active</option>
+                <option value="no">Inactive</option>
+              </select>
+            </div>
+
+            <button onClick={() => setFilters({ property: '', serviceCategory: '', recurring: '', isActive: '' })} style={{
               width: '100%', padding: '8px', background: 'transparent', border: '1px solid var(--border)',
               borderRadius: 'var(--radius)', cursor: 'pointer', fontSize: 13, color: 'var(--text-secondary)'
             }}>
@@ -217,29 +233,46 @@ export default function App() {
                 <div key={doc.id} style={{
                   background: 'white', borderRadius: 'var(--radius)', border: '1px solid var(--border)',
                   padding: 20, display: 'flex', flexDirection: 'column', gap: 12,
-                  transition: 'box-shadow 0.2s, transform 0.2s',
-                  cursor: 'pointer'
+                  transition: 'box-shadow 0.2s, transform 0.2s, opacity 0.2s',
+                  cursor: 'pointer',
+                  opacity: doc.isActive === 0 ? 0.65 : 1
                 }}
                 onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.08)'; e.currentTarget.style.transform = 'translateY(-2px)'; }}
                 onMouseLeave={e => { e.currentTarget.style.boxShadow = 'none'; e.currentTarget.style.transform = 'translateY(0)'; }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <div onClick={() => setDetailDoc(doc)} style={{ flex: 1 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
                         <span style={{
-                          fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em',
-                          padding: '2px 8px', borderRadius: 12,
+                          fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em',
+                          padding: '2px 8px', borderRadius: 10,
                           background: doc.property === 'Canyon View' ? '#e8f0e8' : doc.property === 'Rockpoint' ? '#e8e8f0' : doc.property === 'Boulder Canyon' ? '#f0e8e0' : '#f0f0f0',
                           color: doc.property === 'Canyon View' ? '#2d5a2d' : doc.property === 'Rockpoint' ? '#3d3d5a' : doc.property === 'Boulder Canyon' ? '#5a3d2d' : '#5a5a5a'
                         }}>{doc.property || 'Other'}</span>
                         {doc.recurring === 1 && (
-                          <span style={{
-                            fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em',
-                            padding: '2px 8px', borderRadius: 12, background: 'var(--amber-light)', color: 'var(--charcoal)'
-                          }}>Recurring</span>
+                          <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', padding: '2px 8px', borderRadius: 10, background: 'var(--amber-light)', color: 'var(--charcoal)' }}>
+                            Recurring
+                          </span>
+                        )}
+                        {doc.isActive === 0 && (
+                          <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', padding: '2px 8px', borderRadius: 10, background: '#f0e0e0', color: '#5a2d2d' }}>
+                            Inactive
+                          </span>
+                        )}
+                        {doc.supersededById && (
+                          <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', padding: '2px 8px', borderRadius: 10, background: '#f0e8e0', color: '#5a3d2d' }}>
+                            Superseded
+                          </span>
                         )}
                       </div>
-                      <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 4, lineHeight: 1.3 }}>{doc.originalName}</h3>
+                      <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 2, lineHeight: 1.3 }}>
+                        {doc.projectNickname || doc.originalName}
+                      </h3>
+                      {doc.projectNickname && (
+                        <p style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic', marginBottom: 2 }}>
+                          {doc.originalName}
+                        </p>
+                      )}
                       <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{doc.supplierName || 'Unknown Supplier'}</p>
                     </div>
                     <div style={{ display: 'flex', gap: 4, flexDirection: 'column' }} className="no-print">
@@ -299,6 +332,7 @@ export default function App() {
         <DocumentDetail
           doc={detailDoc}
           onClose={() => setDetailDoc(null)}
+          onSelect={setDetailDoc}
           formatCurrency={formatCurrency}
           formatDate={formatDate}
         />
