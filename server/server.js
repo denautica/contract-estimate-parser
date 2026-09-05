@@ -48,9 +48,7 @@ async function extractText(filePath, fileType) {
     const data = await pdfParse(buffer);
     return data.text;
   } else if (['.jpg', '.jpeg', '.png'].includes(ext)) {
-    const result = await Tesseract.recognize(filePath, 'eng', {
-      logger: m => console.log(m)
-    });
+    const result = await Tesseract.recognize(filePath, 'eng', { logger: m => console.log(m) });
     return result.data.text;
   }
   return '';
@@ -68,7 +66,7 @@ async function processSingleFile(file, batchOptions = {}) {
   const keywords = Array.isArray(parsed.keywords) ? parsed.keywords.join(', ') : parsed.keywords;
 
   const projectNickname = batchOptions.projectNickname || null;
-  const isActive = batchOptions.isActive !== undefined ? (batchOptions.isActive ? 1 : 0) : 1;
+  const isActive = batchOptions.isActive !== undefined ? (batchOptions.isActive ? 1 : 0) : 0;
   const supersededById = null;
 
   return new Promise((resolve, reject) => {
@@ -109,7 +107,7 @@ app.post('/api/upload', upload.array('files', 50), async (req, res) => {
 
     const batchOptions = {
       projectNickname: req.body.projectNickname || null,
-      isActive: req.body.isActive !== 'false'
+      isActive: req.body.isActive === 'true'
     };
 
     const results = [];
@@ -191,6 +189,22 @@ app.put('/api/documents/:id', (req, res) => {
   });
 });
 
+app.put('/api/documents/bulk/status', (req, res) => {
+  const { ids, isActive } = req.body;
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: 'No document IDs provided' });
+  }
+  const placeholders = ids.map(() => '?').join(',');
+  const newStatus = isActive ? 1 : 0;
+  db.run(`UPDATE documents SET isActive = ? WHERE id IN (${placeholders})`, [newStatus, ...ids], function(err) {
+    if (err) {
+      console.error('Bulk update error:', err);
+      return res.status(500).json({ error: err.message });
+    }
+    res.json({ updated: this.changes });
+  });
+});
+
 app.get('/api/documents', (req, res) => {
   const { search, property, serviceCategory, recurring, supplierName, isActive } = req.query;
   let sql = 'SELECT * FROM documents WHERE 1=1';
@@ -222,15 +236,36 @@ app.get('/api/documents', (req, res) => {
   }
   if (isActive !== undefined) {
     if (isActive === 'true') {
-      sql += ' AND (isActive = 1 OR isActive IS NULL)';
+      sql += ' AND isActive = 1';
     } else {
-      sql += ' AND isActive = 0';
+      sql += ' AND (isActive = 0 OR isActive IS NULL)';
     }
   }
 
   sql += ' ORDER BY uploadedAt DESC';
 
   db.all(sql, params, (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+app.get('/api/documents/expiring', (req, res) => {
+  const now = new Date().toISOString().split('T')[0];
+  const sql = `
+    SELECT *, 
+      CASE 
+        WHEN expirationDate < ? THEN 'expired'
+        WHEN julianday(expirationDate) - julianday(?) <= 30 THEN 'critical'
+        WHEN julianday(expirationDate) - julianday(?) <= 60 THEN 'warning'
+        WHEN julianday(expirationDate) - julianday(?) <= 90 THEN 'notice'
+        ELSE 'healthy'
+      END as urgency
+    FROM documents
+    WHERE expirationDate IS NOT NULL
+    ORDER BY expirationDate ASC
+  `;
+  db.all(sql, [now, now, now, now], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
   });
@@ -295,13 +330,17 @@ app.get('/api/stats', (req, res) => {
       if (err) return res.status(500).json({ error: err.message });
       db.get('SELECT COUNT(*) as total FROM documents', [], (err, count) => {
         if (err) return res.status(500).json({ error: err.message });
-        db.get('SELECT COUNT(*) as active FROM documents WHERE isActive = 1 OR isActive IS NULL', [], (err, activeCount) => {
+        db.get('SELECT COUNT(*) as active FROM documents WHERE isActive = 1', [], (err, activeCount) => {
           if (err) return res.status(500).json({ error: err.message });
-          res.json({
-            totalDocuments: count.total,
-            activeDocuments: activeCount.active,
-            properties: properties.map(p => p.property),
-            serviceCategories: categories.map(c => c.serviceCategory)
+          db.get('SELECT COUNT(*) as expiring FROM documents WHERE expirationDate IS NOT NULL AND expirationDate >= date("now") AND julianday(expirationDate) - julianday(date("now")) <= 90', [], (err, expiringCount) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json({
+              totalDocuments: count.total,
+              activeDocuments: activeCount.active,
+              expiringSoon: expiringCount.expiring,
+              properties: properties.map(p => p.property),
+              serviceCategories: categories.map(c => c.serviceCategory)
+            });
           });
         });
       });

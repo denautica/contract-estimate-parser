@@ -9,7 +9,7 @@ export default function UploadModal({ onClose, onSuccess }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
   const [projectNickname, setProjectNickname] = useState('');
-  const [isActive, setIsActive] = useState(true);
+  const [isActive, setIsActive] = useState(false);
   const inputRef = useRef(null);
 
   const handleDrop = (e) => {
@@ -158,11 +158,11 @@ export default function UploadModal({ onClose, onSuccess }) {
                 />
                 <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>A friendly name like "HVAC Replacement 2024"</p>
               </div>
-              <div>
+              <div style={{ padding: 12, borderRadius: 'var(--radius)', background: '#fff8f0', border: '1px solid #e0d0c0' }}>
                 <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                   <Activity size={14} color="var(--amber)" /> Status
                 </label>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <input
                     type="checkbox"
                     id="isActive"
@@ -170,10 +170,13 @@ export default function UploadModal({ onClose, onSuccess }) {
                     onChange={e => setIsActive(e.target.checked)}
                     style={{ width: 18, height: 18, cursor: 'pointer' }}
                   />
-                  <label htmlFor="isActive" style={{ fontSize: 14, cursor: 'pointer', color: 'var(--charcoal)' }}>
-                    Mark uploaded documents as active
+                  <label htmlFor="isActive" style={{ fontSize: 14, cursor: 'pointer', color: 'var(--charcoal)', fontWeight: 600 }}>
+                    Mark as Active
                   </label>
                 </div>
+                <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6, marginLeft: 28 }}>
+                  Contracts are <strong>Inactive</strong> by default. Check this box to make them Active immediately.
+                </p>
               </div>
             </div>
           </div>

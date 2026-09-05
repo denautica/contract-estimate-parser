@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { FileText, Upload, Search, Filter, BarChart3, Trash2, Eye, CheckSquare, Square, X, Activity, ArrowRight } from 'lucide-react';
+import { FileText, Upload, Search, Filter, BarChart3, Trash2, Eye, CheckSquare, Square, X, Activity, AlertTriangle, Clock, CheckCircle } from 'lucide-react';
 import UploadModal from './components/UploadModal';
 import DocumentDetail from './components/DocumentDetail';
 import CompareView from './components/CompareView';
@@ -8,7 +8,8 @@ const API_URL = '/api';
 
 export default function App() {
   const [documents, setDocuments] = useState([]);
-  const [stats, setStats] = useState({ totalDocuments: 0, activeDocuments: 0, properties: [], serviceCategories: [] });
+  const [stats, setStats] = useState({ totalDocuments: 0, activeDocuments: 0, expiringSoon: 0, properties: [], serviceCategories: [] });
+  const [expiringDocs, setExpiringDocs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filters, setFilters] = useState({ property: '', serviceCategory: '', recurring: '', isActive: '' });
@@ -16,6 +17,8 @@ export default function App() {
   const [showUpload, setShowUpload] = useState(false);
   const [detailDoc, setDetailDoc] = useState(null);
   const [compareDocs, setCompareDocs] = useState(null);
+  const [bulkMode, setBulkMode] = useState(false);
+  const [bulkUpdating, setBulkUpdating] = useState(false);
 
   const fetchDocs = useCallback(async () => {
     setLoading(true);
@@ -38,21 +41,56 @@ export default function App() {
     setStats(data);
   };
 
+  const fetchExpiring = async () => {
+    const res = await fetch(`${API_URL}/documents/expiring`);
+    const data = await res.json();
+    setExpiringDocs(data.filter(d => d.urgency !== 'healthy').slice(0, 6));
+  };
+
   useEffect(() => {
     fetchDocs();
   }, [fetchDocs]);
 
   useEffect(() => {
     fetchStats();
+    fetchExpiring();
   }, []);
 
   const toggleSelect = (id) => {
     setSelectedDocs(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
-      else if (next.size < 4) next.add(id);
+      else if (next.size < 4 || bulkMode) next.add(id);
       return next;
     });
+  };
+
+  const clearBulk = () => {
+    setSelectedDocs(new Set());
+    setBulkMode(false);
+  };
+
+  const bulkSetStatus = async (isActive) => {
+    if (selectedDocs.size === 0) return;
+    setBulkUpdating(true);
+    const ids = Array.from(selectedDocs);
+    try {
+      const res = await fetch(`${API_URL}/documents/bulk/status`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids, isActive })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Bulk update failed');
+      setSelectedDocs(new Set());
+      setBulkMode(false);
+      fetchDocs();
+      fetchStats();
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setBulkUpdating(false);
+    }
   };
 
   const handleDelete = async (id) => {
@@ -61,6 +99,7 @@ export default function App() {
     setSelectedDocs(prev => { const n = new Set(prev); n.delete(id); return n; });
     fetchDocs();
     fetchStats();
+    fetchExpiring();
   };
 
   const handleCompare = async () => {
@@ -83,6 +122,30 @@ export default function App() {
   const formatDate = (val) => {
     if (!val) return '—';
     return new Date(val).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  };
+
+  const urgencyColor = (u) => {
+    if (u === 'expired') return '#8a2d2d';
+    if (u === 'critical') return '#c87e3a';
+    if (u === 'warning') return '#b8860b';
+    if (u === 'notice') return '#2d5a8a';
+    return '#5a8a2d';
+  };
+
+  const urgencyBg = (u) => {
+    if (u === 'expired') return '#fff0f0';
+    if (u === 'critical') return '#fff8f0';
+    if (u === 'warning') return '#fffdf0';
+    if (u === 'notice') return '#f0f8ff';
+    return '#f0fff0';
+  };
+
+  const urgencyLabel = (u) => {
+    if (u === 'expired') return 'Expired';
+    if (u === 'critical') return '< 30 days';
+    if (u === 'warning') return '< 60 days';
+    if (u === 'notice') return '< 90 days';
+    return 'Healthy';
   };
 
   return (
@@ -112,7 +175,7 @@ export default function App() {
         </div>
 
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }} className="no-print">
-          {selectedDocs.size >= 2 && (
+          {selectedDocs.size >= 2 && !bulkMode && (
             <button onClick={handleCompare} style={{
               padding: '10px 18px', background: 'var(--amber)', color: 'var(--charcoal)',
               border: 'none', borderRadius: 'var(--radius)', fontWeight: 600, cursor: 'pointer',
@@ -122,6 +185,20 @@ export default function App() {
               Compare ({selectedDocs.size})
             </button>
           )}
+          <button
+            onClick={() => {
+              setBulkMode(!bulkMode);
+              setSelectedDocs(new Set());
+            }}
+            style={{
+              padding: '10px 18px', background: bulkMode ? 'var(--amber-light)' : 'var(--warm-white)',
+              color: 'var(--charcoal)', border: 'none', borderRadius: 'var(--radius)', fontWeight: 600,
+              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 14
+            }}
+          >
+            <CheckSquare size={16} />
+            {bulkMode ? 'Done Selecting' : 'Bulk Edit'}
+          </button>
           <button onClick={() => setShowUpload(true)} style={{
             padding: '10px 18px', background: 'var(--warm-white)', color: 'var(--charcoal)',
             border: 'none', borderRadius: 'var(--radius)', fontWeight: 600, cursor: 'pointer',
@@ -204,6 +281,110 @@ export default function App() {
         </aside>
 
         <main style={{ flex: 1 }}>
+          {/* Expiring Dashboard */}
+          {expiringDocs.length > 0 && (
+            <div style={{ marginBottom: 24 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                <AlertTriangle size={18} color="var(--amber)" />
+                <h2 style={{ fontSize: 16, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--charcoal)' }}>
+                  Expiring & Expired Contracts
+                </h2>
+                <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 500 }}>
+                  ({stats.expiringSoon} expiring in 90 days)
+                </span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 12 }}>
+                {expiringDocs.map(doc => (
+                  <div
+                    key={doc.id}
+                    onClick={() => setDetailDoc(doc)}
+                    style={{
+                      padding: 14, borderRadius: 'var(--radius)', border: '1px solid var(--border)',
+                      background: urgencyBg(doc.urgency), cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', gap: 12,
+                      transition: 'box-shadow 0.2s',
+                      borderLeft: `4px solid ${urgencyColor(doc.urgency)}`
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.08)'}
+                    onMouseLeave={e => e.currentTarget.style.boxShadow = 'none'}
+                  >
+                    <div style={{
+                      width: 36, height: 36, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      background: urgencyColor(doc.urgency), flexShrink: 0
+                    }}>
+                      {doc.urgency === 'expired' ? <AlertTriangle size={18} color="white" /> : <Clock size={18} color="white" />}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <p style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {doc.projectNickname || doc.originalName}
+                      </p>
+                      <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                        {doc.supplierName} · Expires {formatDate(doc.expirationDate)}
+                      </p>
+                    </div>
+                    <span style={{
+                      fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em',
+                      padding: '2px 8px', borderRadius: 10, background: 'white', color: urgencyColor(doc.urgency),
+                      border: `1px solid ${urgencyColor(doc.urgency)}`, flexShrink: 0
+                    }}>
+                      {urgencyLabel(doc.urgency)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Bulk Action Bar */}
+          {bulkMode && selectedDocs.size > 0 && (
+            <div style={{
+              marginBottom: 20, padding: 14, borderRadius: 'var(--radius)',
+              background: 'var(--warm-white)', border: '2px solid var(--amber)',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <CheckSquare size={18} color="var(--amber)" />
+                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--charcoal)' }}>
+                  {selectedDocs.size} selected
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  onClick={() => bulkSetStatus(true)}
+                  disabled={bulkUpdating}
+                  style={{
+                    padding: '8px 14px', background: '#2d5a2d', color: 'white', border: 'none',
+                    borderRadius: 'var(--radius)', cursor: bulkUpdating ? 'not-allowed' : 'pointer',
+                    fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6
+                  }}
+                >
+                  <CheckCircle size={14} /> {bulkUpdating ? 'Updating...' : 'Mark Active'}
+                </button>
+                <button
+                  onClick={() => bulkSetStatus(false)}
+                  disabled={bulkUpdating}
+                  style={{
+                    padding: '8px 14px', background: '#8a2d2d', color: 'white', border: 'none',
+                    borderRadius: 'var(--radius)', cursor: bulkUpdating ? 'not-allowed' : 'pointer',
+                    fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6
+                  }}
+                >
+                  <X size={14} /> {bulkUpdating ? 'Updating...' : 'Mark Inactive'}
+                </button>
+                <button
+                  onClick={clearBulk}
+                  style={{
+                    padding: '8px 14px', background: 'transparent', color: 'var(--text-secondary)',
+                    border: '1px solid var(--border)', borderRadius: 'var(--radius)',
+                    cursor: 'pointer', fontSize: 13, fontWeight: 600
+                  }}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+          )}
+
           <div style={{ display: 'flex', gap: 12, marginBottom: 20 }} className="no-print">
             <div style={{ flex: 1, position: 'relative' }}>
               <Search size={18} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
@@ -231,14 +412,16 @@ export default function App() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 16 }}>
               {documents.map(doc => (
                 <div key={doc.id} style={{
-                  background: 'white', borderRadius: 'var(--radius)', border: '1px solid var(--border)',
+                  background: 'white',
+                  borderRadius: 'var(--radius)',
+                  border: doc.isActive === 1 ? '2px solid var(--amber)' : '1px solid var(--border)',
                   padding: 20, display: 'flex', flexDirection: 'column', gap: 12,
-                  transition: 'box-shadow 0.2s, transform 0.2s, opacity 0.2s',
+                  transition: 'box-shadow 0.2s, transform 0.2s',
                   cursor: 'pointer',
-                  opacity: doc.isActive === 0 ? 0.65 : 1
+                  boxShadow: doc.isActive === 1 ? '0 0 12px rgba(200, 126, 58, 0.15)' : 'none'
                 }}
-                onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.08)'; e.currentTarget.style.transform = 'translateY(-2px)'; }}
-                onMouseLeave={e => { e.currentTarget.style.boxShadow = 'none'; e.currentTarget.style.transform = 'translateY(0)'; }}
+                onMouseEnter={e => { e.currentTarget.style.boxShadow = doc.isActive === 1 ? '0 4px 16px rgba(200, 126, 58, 0.25)' : '0 4px 12px rgba(0,0,0,0.08)'; e.currentTarget.style.transform = 'translateY(-2px)'; }}
+                onMouseLeave={e => { e.currentTarget.style.boxShadow = doc.isActive === 1 ? '0 0 12px rgba(200, 126, 58, 0.15)' : 'none'; e.currentTarget.style.transform = 'translateY(0)'; }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <div onClick={() => setDetailDoc(doc)} style={{ flex: 1 }}>
@@ -254,9 +437,9 @@ export default function App() {
                             Recurring
                           </span>
                         )}
-                        {doc.isActive === 0 && (
-                          <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', padding: '2px 8px', borderRadius: 10, background: '#f0e0e0', color: '#5a2d2d' }}>
-                            Inactive
+                        {doc.isActive === 1 && (
+                          <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', padding: '2px 8px', borderRadius: 10, background: '#e8f0e8', color: '#2d5a2d' }}>
+                            Active
                           </span>
                         )}
                         {doc.supersededById && (
@@ -324,7 +507,7 @@ export default function App() {
       {showUpload && (
         <UploadModal
           onClose={() => setShowUpload(false)}
-          onSuccess={() => { fetchDocs(); fetchStats(); setShowUpload(false); }}
+          onSuccess={() => { fetchDocs(); fetchStats(); fetchExpiring(); setShowUpload(false); }}
         />
       )}
 
