@@ -5,40 +5,42 @@ const fs = require('fs');
 const dataDir = path.join(__dirname, '..', 'data');
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
-const db = new sqlite3.Database(path.join(dataDir, 'documents.db'));
+const dbPath = path.join(dataDir, 'documents.db');
+const db = new sqlite3.Database(dbPath);
 
 db.serialize(() => {
-  db.run(`
-    CREATE TABLE IF NOT EXISTS documents (
-      id TEXT PRIMARY KEY,
-      filename TEXT,
-      originalName TEXT,
-      filePath TEXT,
-      fileType TEXT,
-      uploadedAt TEXT,
-      estimateDate TEXT,
-      supplierName TEXT,
-      property TEXT,
-      description TEXT,
-      keywords TEXT,
-      serviceCategory TEXT,
-      totalPrice REAL,
-      recurring INTEGER,
-      billingInterval TEXT,
-      intervalAmount REAL,
-      expirationDate TEXT,
-      cancellationTerms TEXT,
-      rawText TEXT,
-      projectNickname TEXT,
-      isActive INTEGER DEFAULT 1,
-      supersededById TEXT
-    )
-  `);
+  db.run(`CREATE TABLE IF NOT EXISTS documents (
+    id TEXT PRIMARY KEY,
+    filename TEXT NOT NULL,
+    originalName TEXT NOT NULL,
+    filePath TEXT NOT NULL,
+    fileType TEXT NOT NULL,
+    uploadedAt TEXT NOT NULL,
+    estimateDate TEXT,
+    supplierName TEXT,
+    property TEXT DEFAULT 'Other',
+    description TEXT,
+    keywords TEXT,
+    serviceCategory TEXT,
+    totalPrice REAL,
+    recurring INTEGER DEFAULT 0,
+    billingInterval TEXT,
+    intervalAmount REAL,
+    expirationDate TEXT,
+    cancellationTerms TEXT,
+    rawText TEXT,
+    projectNickname TEXT,
+    isActive INTEGER DEFAULT 0,
+    supersededById TEXT
+  )`);
 
-  // Migrate existing tables: silently ignore errors if columns already exist
-  db.run(`ALTER TABLE documents ADD COLUMN projectNickname TEXT`, () => {});
-  db.run(`ALTER TABLE documents ADD COLUMN isActive INTEGER DEFAULT 1`, () => {});
-  db.run(`ALTER TABLE documents ADD COLUMN supersededById TEXT`, () => {});
+  db.run(`CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    username TEXT UNIQUE NOT NULL,
+    passwordHash TEXT NOT NULL,
+    role TEXT DEFAULT 'user',
+    createdAt TEXT NOT NULL
+  )`);
 });
 
 module.exports = db;

@@ -6,6 +6,8 @@ const fs = require('fs');
 const pdfParse = require('pdf-parse');
 const Tesseract = require('tesseract.js');
 const { v4: uuidv4 } = require('uuid');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 const db = require('./database');
@@ -13,9 +15,82 @@ const { parseDocument } = require('./parser');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const JWT_SECRET = process.env.JWT_SECRET || 'change-this-in-production-immediately';
 
 app.use(cors());
 app.use(express.json());
+
+function authMiddleware(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  const token = authHeader.slice(7);
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+}
+
+function createDefaultUser() {
+  const adminUser = process.env.ADMIN_USER || 'admin';
+  const adminPass = process.env.ADMIN_PASSWORD || 'changeme123';
+  const hash = bcrypt.hashSync(adminPass, 10);
+  const now = new Date().toISOString();
+
+  db.get('SELECT id FROM users WHERE username = ?', [adminUser], (err, row) => {
+    if (err) {
+      console.error('Error checking default user:', err);
+      return;
+    }
+    if (!row) {
+      db.run(
+        'INSERT INTO users (id, username, passwordHash, role, createdAt) VALUES (?, ?, ?, ?, ?)',
+        [uuidv4(), adminUser, hash, 'admin', now],
+        (err) => {
+          if (err) console.error('Error creating default user:', err);
+          else console.log(`Default admin user created: ${adminUser}`);
+        }
+      );
+    }
+  });
+}
+
+createDefaultUser();
+
+app.post('/api/auth/login', (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password required' });
+  }
+
+  db.get('SELECT * FROM users WHERE username = ?', [username], (err, user) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+
+    const valid = bcrypt.compareSync(password, user.passwordHash);
+    if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
+
+    const token = jwt.sign(
+      { id: user.id, username: user.username, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
+  });
+});
+
+app.get('/api/auth/me', authMiddleware, (req, res) => {
+  db.get('SELECT id, username, role, createdAt FROM users WHERE id = ?', [req.user.id], (err, user) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json(user);
+  });
+});
 
 const uploadsDir = path.join(__dirname, '..', 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
@@ -39,7 +114,7 @@ const upload = multer({
   }
 });
 
-app.use('/uploads', express.static(uploadsDir));
+app.use('/uploads', authMiddleware, express.static(uploadsDir));
 
 async function extractText(filePath, fileType) {
   const ext = path.extname(filePath).toLowerCase();
@@ -99,7 +174,7 @@ async function processSingleFile(file, batchOptions = {}) {
   });
 }
 
-app.post('/api/upload', upload.array('files', 50), async (req, res) => {
+app.post('/api/upload', authMiddleware, upload.array('files', 50), async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'No files uploaded' });
@@ -131,7 +206,7 @@ app.post('/api/upload', upload.array('files', 50), async (req, res) => {
   }
 });
 
-app.put('/api/documents/:id', (req, res) => {
+app.put('/api/documents/:id', authMiddleware, (req, res) => {
   const { id } = req.params;
   const {
     estimateDate, supplierName, property, description, keywords,
@@ -189,7 +264,7 @@ app.put('/api/documents/:id', (req, res) => {
   });
 });
 
-app.put('/api/documents/bulk/status', (req, res) => {
+app.put('/api/documents/bulk/status', authMiddleware, (req, res) => {
   const { ids, isActive } = req.body;
   if (!Array.isArray(ids) || ids.length === 0) {
     return res.status(400).json({ error: 'No document IDs provided' });
@@ -205,7 +280,7 @@ app.put('/api/documents/bulk/status', (req, res) => {
   });
 });
 
-app.get('/api/documents', (req, res) => {
+app.get('/api/documents', authMiddleware, (req, res) => {
   const { search, property, serviceCategory, recurring, supplierName, isActive } = req.query;
   let sql = 'SELECT * FROM documents WHERE 1=1';
   const params = [];
@@ -250,7 +325,7 @@ app.get('/api/documents', (req, res) => {
   });
 });
 
-app.get('/api/documents/expiring', (req, res) => {
+app.get('/api/documents/expiring', authMiddleware, (req, res) => {
   const now = new Date().toISOString().split('T')[0];
   const sql = `
     SELECT *, 
@@ -271,7 +346,7 @@ app.get('/api/documents/expiring', (req, res) => {
   });
 });
 
-app.get('/api/documents/:id', (req, res) => {
+app.get('/api/documents/:id', authMiddleware, (req, res) => {
   db.get('SELECT * FROM documents WHERE id = ?', [req.params.id], (err, row) => {
     if (err) return res.status(500).json({ error: err.message });
     if (!row) return res.status(404).json({ error: 'Document not found' });
@@ -289,14 +364,14 @@ app.get('/api/documents/:id', (req, res) => {
   });
 });
 
-app.get('/api/documents/:id/supersedes', (req, res) => {
+app.get('/api/documents/:id/supersedes', authMiddleware, (req, res) => {
   db.all('SELECT id, originalName, projectNickname, uploadedAt, supplierName FROM documents WHERE supersededById = ?', [req.params.id], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
   });
 });
 
-app.delete('/api/documents/:id', (req, res) => {
+app.delete('/api/documents/:id', authMiddleware, (req, res) => {
   db.get('SELECT filePath FROM documents WHERE id = ?', [req.params.id], (err, row) => {
     if (err) return res.status(500).json({ error: err.message });
     if (!row) return res.status(404).json({ error: 'Document not found' });
@@ -310,7 +385,7 @@ app.delete('/api/documents/:id', (req, res) => {
   });
 });
 
-app.post('/api/compare', (req, res) => {
+app.post('/api/compare', authMiddleware, (req, res) => {
   const { ids } = req.body;
   if (!Array.isArray(ids) || ids.length < 2 || ids.length > 4) {
     return res.status(400).json({ error: 'Select 2 to 4 documents to compare' });
@@ -323,7 +398,7 @@ app.post('/api/compare', (req, res) => {
   });
 });
 
-app.get('/api/stats', (req, res) => {
+app.get('/api/stats', authMiddleware, (req, res) => {
   db.all('SELECT DISTINCT property FROM documents ORDER BY property', [], (err, properties) => {
     if (err) return res.status(500).json({ error: err.message });
     db.all('SELECT DISTINCT serviceCategory FROM documents WHERE serviceCategory IS NOT NULL ORDER BY serviceCategory', [], (err, categories) => {
@@ -360,4 +435,5 @@ if (fs.existsSync(clientDist)) {
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Default admin user: ${process.env.ADMIN_USER || 'admin'}`);
 });

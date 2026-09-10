@@ -1,12 +1,22 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { FileText, Upload, Search, Filter, BarChart3, Trash2, Eye, CheckSquare, Square, X, Activity, AlertTriangle, Clock, CheckCircle } from 'lucide-react';
+import { FileText, Upload, Search, Filter, BarChart3, Trash2, Eye, CheckSquare, Square, X, Activity, AlertTriangle, Clock, CheckCircle, LogOut, User } from 'lucide-react';
+import Login from './components/Login';
 import UploadModal from './components/UploadModal';
 import DocumentDetail from './components/DocumentDetail';
 import CompareView from './components/CompareView';
 
 const API_URL = '/api';
 
+function getAuthHeaders() {
+  const token = localStorage.getItem('token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export default function App() {
+  const [user, setUser] = useState(() => {
+    const saved = localStorage.getItem('user');
+    return saved ? JSON.parse(saved) : null;
+  });
   const [documents, setDocuments] = useState([]);
   const [stats, setStats] = useState({ totalDocuments: 0, activeDocuments: 0, expiringSoon: 0, properties: [], serviceCategories: [] });
   const [expiringDocs, setExpiringDocs] = useState([]);
@@ -20,6 +30,23 @@ export default function App() {
   const [bulkMode, setBulkMode] = useState(false);
   const [bulkUpdating, setBulkUpdating] = useState(false);
 
+  const fetchWithAuth = useCallback(async (url, options = {}) => {
+    const res = await fetch(url, {
+      ...options,
+      headers: {
+        ...getAuthHeaders(),
+        ...(options.headers || {})
+      }
+    });
+    if (res.status === 401) {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      setUser(null);
+      throw new Error('Session expired. Please sign in again.');
+    }
+    return res;
+  }, []);
+
   const fetchDocs = useCallback(async () => {
     setLoading(true);
     const params = new URLSearchParams();
@@ -29,32 +56,47 @@ export default function App() {
     if (filters.recurring) params.append('recurring', filters.recurring === 'yes' ? 'true' : 'false');
     if (filters.isActive) params.append('isActive', filters.isActive === 'yes' ? 'true' : 'false');
     
-    const res = await fetch(`${API_URL}/documents?${params}`);
-    const data = await res.json();
-    setDocuments(data);
-    setLoading(false);
-  }, [search, filters]);
+    try {
+      const res = await fetchWithAuth(`${API_URL}/documents?${params}`);
+      const data = await res.json();
+      setDocuments(data);
+    } catch (err) {
+      console.error(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [search, filters, fetchWithAuth]);
 
   const fetchStats = async () => {
-    const res = await fetch(`${API_URL}/stats`);
-    const data = await res.json();
-    setStats(data);
+    try {
+      const res = await fetchWithAuth(`${API_URL}/stats`);
+      const data = await res.json();
+      setStats(data);
+    } catch (err) {
+      console.error(err.message);
+    }
   };
 
   const fetchExpiring = async () => {
-    const res = await fetch(`${API_URL}/documents/expiring`);
-    const data = await res.json();
-    setExpiringDocs(data.filter(d => d.urgency !== 'healthy').slice(0, 6));
+    try {
+      const res = await fetchWithAuth(`${API_URL}/documents/expiring`);
+      const data = await res.json();
+      setExpiringDocs(data.filter(d => d.urgency !== 'healthy').slice(0, 6));
+    } catch (err) {
+      console.error(err.message);
+    }
   };
 
   useEffect(() => {
+    if (!user) return;
     fetchDocs();
-  }, [fetchDocs]);
+  }, [fetchDocs, user]);
 
   useEffect(() => {
+    if (!user) return;
     fetchStats();
     fetchExpiring();
-  }, []);
+  }, [user]);
 
   const toggleSelect = (id) => {
     setSelectedDocs(prev => {
@@ -75,7 +117,7 @@ export default function App() {
     setBulkUpdating(true);
     const ids = Array.from(selectedDocs);
     try {
-      const res = await fetch(`${API_URL}/documents/bulk/status`, {
+      const res = await fetchWithAuth(`${API_URL}/documents/bulk/status`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids, isActive })
@@ -95,7 +137,7 @@ export default function App() {
 
   const handleDelete = async (id) => {
     if (!confirm('Delete this document?')) return;
-    await fetch(`${API_URL}/documents/${id}`, { method: 'DELETE' });
+    await fetchWithAuth(`${API_URL}/documents/${id}`, { method: 'DELETE' });
     setSelectedDocs(prev => { const n = new Set(prev); n.delete(id); return n; });
     fetchDocs();
     fetchStats();
@@ -105,13 +147,19 @@ export default function App() {
   const handleCompare = async () => {
     if (selectedDocs.size < 2) return;
     const ids = Array.from(selectedDocs);
-    const res = await fetch(`${API_URL}/compare`, {
+    const res = await fetchWithAuth(`${API_URL}/compare`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids })
     });
     const data = await res.json();
     setCompareDocs(data);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    setUser(null);
   };
 
   const formatCurrency = (val) => {
@@ -148,6 +196,10 @@ export default function App() {
     return 'Healthy';
   };
 
+  if (!user) {
+    return <Login onLogin={setUser} />;
+  }
+
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       <header style={{
@@ -175,6 +227,10 @@ export default function App() {
         </div>
 
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }} className="no-print">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-muted)', padding: '6px 12px', borderRadius: 'var(--radius)', background: 'rgba(255,255,255,0.08)' }}>
+            <User size={14} />
+            <span>{user.username}</span>
+          </div>
           {selectedDocs.size >= 2 && !bulkMode && (
             <button onClick={handleCompare} style={{
               padding: '10px 18px', background: 'var(--amber)', color: 'var(--charcoal)',
@@ -206,6 +262,13 @@ export default function App() {
           }}>
             <Upload size={16} />
             Upload Document
+          </button>
+          <button onClick={handleLogout} style={{
+            padding: '10px 14px', background: 'transparent', color: 'var(--text-muted)',
+            border: '1px solid rgba(255,255,255,0.15)', borderRadius: 'var(--radius)',
+            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 14
+          }}>
+            <LogOut size={16} />
           </button>
         </div>
       </header>
