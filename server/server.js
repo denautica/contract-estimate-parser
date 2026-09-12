@@ -325,6 +325,40 @@ app.get('/api/documents', authMiddleware, (req, res) => {
   });
 });
 
+app.get('/api/documents/duplicates', authMiddleware, (req, res) => {
+  const { type } = req.query;
+  
+  if (type === 'contract') {
+    db.all(`SELECT * FROM documents ORDER BY supplierName, property, totalPrice, uploadedAt DESC`, [], (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      
+      const groups = {};
+      rows.forEach(row => {
+        if (!row.supplierName || row.supplierName === 'Unknown Supplier' || !row.property || row.property === 'Other') return;
+        const key = `${row.supplierName}|${row.property}|${row.totalPrice || 'none'}`;
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(row);
+      });
+      
+      const duplicates = Object.values(groups).filter(g => g.length > 1);
+      res.json(duplicates);
+    });
+  } else {
+    db.all(`SELECT * FROM documents ORDER BY originalName, uploadedAt DESC`, [], (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      
+      const groups = {};
+      rows.forEach(row => {
+        if (!groups[row.originalName]) groups[row.originalName] = [];
+        groups[row.originalName].push(row);
+      });
+      
+      const duplicates = Object.values(groups).filter(g => g.length > 1);
+      res.json(duplicates);
+    });
+  }
+});
+
 app.get('/api/documents/expiring', authMiddleware, (req, res) => {
   const now = new Date().toISOString().split('T')[0];
   const sql = `
@@ -409,12 +443,16 @@ app.get('/api/stats', authMiddleware, (req, res) => {
           if (err) return res.status(500).json({ error: err.message });
           db.get('SELECT COUNT(*) as expiring FROM documents WHERE expirationDate IS NOT NULL AND expirationDate >= date("now") AND julianday(expirationDate) - julianday(date("now")) <= 90', [], (err, expiringCount) => {
             if (err) return res.status(500).json({ error: err.message });
-            res.json({
-              totalDocuments: count.total,
-              activeDocuments: activeCount.active,
-              expiringSoon: expiringCount.expiring,
-              properties: properties.map(p => p.property),
-              serviceCategories: categories.map(c => c.serviceCategory)
+            db.get('SELECT COUNT(*) as duplicateCount FROM (SELECT originalName FROM documents GROUP BY originalName HAVING COUNT(*) > 1)', [], (err, dupCount) => {
+              if (err) return res.status(500).json({ error: err.message });
+              res.json({
+                totalDocuments: count.total,
+                activeDocuments: activeCount.active,
+                expiringSoon: expiringCount.expiring,
+                duplicateFiles: dupCount.duplicateCount || 0,
+                properties: properties.map(p => p.property),
+                serviceCategories: categories.map(c => c.serviceCategory)
+              });
             });
           });
         });

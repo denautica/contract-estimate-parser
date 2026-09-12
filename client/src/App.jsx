@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { FileText, Upload, Search, Filter, BarChart3, Trash2, Eye, CheckSquare, Square, X, Activity, AlertTriangle, Clock, CheckCircle, LogOut, User } from 'lucide-react';
+import { FileText, Upload, Search, Filter, BarChart3, Trash2, Eye, CheckSquare, Square, X, Activity, AlertTriangle, Clock, CheckCircle, LogOut, User, Copy } from 'lucide-react';
 import Login from './components/Login';
 import UploadModal from './components/UploadModal';
 import DocumentDetail from './components/DocumentDetail';
 import CompareView from './components/CompareView';
+import DuplicateFinder from './components/DuplicateFinder';
 
 const API_URL = '/api';
 
@@ -18,7 +19,7 @@ export default function App() {
     return saved ? JSON.parse(saved) : null;
   });
   const [documents, setDocuments] = useState([]);
-  const [stats, setStats] = useState({ totalDocuments: 0, activeDocuments: 0, expiringSoon: 0, properties: [], serviceCategories: [] });
+  const [stats, setStats] = useState({ totalDocuments: 0, activeDocuments: 0, expiringSoon: 0, duplicateFiles: 0, properties: [], serviceCategories: [] });
   const [expiringDocs, setExpiringDocs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -29,6 +30,7 @@ export default function App() {
   const [compareDocs, setCompareDocs] = useState(null);
   const [bulkMode, setBulkMode] = useState(false);
   const [bulkUpdating, setBulkUpdating] = useState(false);
+  const [showDuplicates, setShowDuplicates] = useState(false);
 
   const fetchWithAuth = useCallback(async (url, options = {}) => {
     const res = await fetch(url, {
@@ -222,6 +224,11 @@ export default function App() {
             <h1 style={{ fontSize: 22, letterSpacing: '-0.02em', lineHeight: 1.2 }}>Contract & Estimate Parser</h1>
             <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
               {stats.activeDocuments} active / {stats.totalDocuments} total documents
+              {stats.duplicateFiles > 0 && (
+                <span style={{ marginLeft: 8, color: 'var(--amber)', fontWeight: 600 }}>
+                  · {stats.duplicateFiles} duplicate file names
+                </span>
+              )}
             </p>
           </div>
         </div>
@@ -231,6 +238,16 @@ export default function App() {
             <User size={14} />
             <span>{user.username}</span>
           </div>
+          {stats.duplicateFiles > 0 && (
+            <button onClick={() => setShowDuplicates(true)} style={{
+              padding: '10px 18px', background: '#fff8f0', color: '#8a6d2d',
+              border: '1px solid #e0d0c0', borderRadius: 'var(--radius)', fontWeight: 600,
+              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 14
+            }}>
+              <Copy size={16} />
+              Duplicates ({stats.duplicateFiles})
+            </button>
+          )}
           {selectedDocs.size >= 2 && !bulkMode && (
             <button onClick={handleCompare} style={{
               padding: '10px 18px', background: 'var(--amber)', color: 'var(--charcoal)',
@@ -590,6 +607,15 @@ export default function App() {
           onClose={() => setCompareDocs(null)}
           formatCurrency={formatCurrency}
           formatDate={formatDate}
+        />
+      )}
+
+      {showDuplicates && (
+        <DuplicateFinder
+          onClose={() => setShowDuplicates(false)}
+          formatCurrency={formatCurrency}
+          formatDate={formatDate}
+          onDelete={() => { fetchDocs(); fetchStats(); fetchExpiring(); }}
         />
       )}
     </div>
