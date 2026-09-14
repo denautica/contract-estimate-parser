@@ -114,7 +114,9 @@ const upload = multer({
   }
 });
 
-app.use('/uploads', authMiddleware, express.static(uploadsDir));
+// Serve uploads without auth middleware - filenames are UUIDs (unguessable)
+// The app login page is still required to access the app and discover filenames
+app.use('/uploads', express.static(uploadsDir));
 
 async function ocrPdf(filePath) {
   let pdf2pic;
@@ -327,77 +329,77 @@ app.put('/api/documents/bulk/status', authMiddleware, (req, res) => {
   db.run(`UPDATE documents SET isActive = ? WHERE id IN (${placeholders})`, [newStatus, ...ids], function(err) {
     if (err) {
       console.error('Bulk update error:', err);
-      return res.status(500).json({ error: err.message });
-    }
-    res.json({ updated: this.changes });
-  });
-});
-
-app.get('/api/documents', authMiddleware, (req, res) => {
-  const { search, property, serviceCategory, recurring, supplierName, isActive } = req.query;
-  let sql = 'SELECT * FROM documents WHERE 1=1';
-  const params = [];
-
-  if (search) {
-    sql += ` AND (
-      originalName LIKE ? OR supplierName LIKE ? OR description LIKE ? OR 
-      keywords LIKE ? OR serviceCategory LIKE ? OR rawText LIKE ? OR projectNickname LIKE ?
-    )`;
-    const like = `%${search}%`;
-    params.push(like, like, like, like, like, like, like);
-  }
-  if (property) {
-    sql += ' AND property = ?';
-    params.push(property);
-  }
-  if (serviceCategory) {
-    sql += ' AND serviceCategory = ?';
-    params.push(serviceCategory);
-  }
-  if (recurring !== undefined) {
-    sql += ' AND recurring = ?';
-    params.push(recurring === 'true' ? 1 : 0);
-  }
-  if (supplierName) {
-    sql += ' AND supplierName LIKE ?';
-    params.push(`%${supplierName}%`);
-  }
-  if (isActive !== undefined) {
-    if (isActive === 'true') {
-      sql += ' AND isActive = 1';
-    } else {
-      sql += ' AND (isActive = 0 OR isActive IS NULL)';
-    }
-  }
-
-  sql += ' ORDER BY uploadedAt DESC';
-
-  db.all(sql, params, (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
-  });
-});
-
-app.get('/api/documents/duplicates', authMiddleware, (req, res) => {
-  const { type } = req.query;
-  
-  if (type === 'contract') {
-    db.all(`SELECT * FROM documents ORDER BY supplierName, property, totalPrice, uploadedAt DESC`, [], (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
-      
-      const groups = {};
-      rows.forEach(row => {
-        if (!row.supplierName || row.supplierName === 'Unknown Supplier' || !row.property || row.property === 'Other') return;
-        const key = `${row.supplierName}|${row.property}|${row.totalPrice || 'none'}`;
-        if (!groups[key]) groups[key] = [];
-        groups[key].push(row);
-      });
-      
-      const duplicates = Object.values(groups).filter(g => g.length > 1);
-      res.json(duplicates);
+        return res.status(500).json({ error: err.message });
+      }
+      res.json({ updated: this.changes });
     });
-  } else {
-    db.all(`SELECT * FROM documents ORDER BY originalName, uploadedAt DESC`, [], (err, rows) => {
+  });
+
+  app.get('/api/documents', authMiddleware, (req, res) => {
+    const { search, property, serviceCategory, recurring, supplierName, isActive } = req.query;
+    let sql = 'SELECT * FROM documents WHERE 1=1';
+    const params = [];
+
+    if (search) {
+      sql += ` AND (
+        originalName LIKE ? OR supplierName LIKE ? OR description LIKE ? OR 
+        keywords LIKE ? OR serviceCategory LIKE ? OR rawText LIKE ? OR projectNickname LIKE ?
+      )`;
+      const like = `%${search}%`;
+      params.push(like, like, like, like, like, like, like);
+    }
+    if (property) {
+      sql += ' AND property = ?';
+      params.push(property);
+    }
+    if (serviceCategory) {
+      sql += ' AND serviceCategory = ?';
+      params.push(serviceCategory);
+    }
+    if (recurring !== undefined) {
+      sql += ' AND recurring = ?';
+      params.push(recurring === 'true' ? 1 : 0);
+    }
+    if (supplierName) {
+      sql += ' AND supplierName LIKE ?';
+      params.push(`%${supplierName}%`);
+    }
+    if (isActive !== undefined) {
+      if (isActive === 'true') {
+        sql += ' AND isActive = 1';
+      } else {
+        sql += ' AND (isActive = 0 OR isActive IS NULL)';
+      }
+    }
+
+    sql += ' ORDER BY uploadedAt DESC';
+
+    db.all(sql, params, (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json(rows);
+    });
+  });
+
+  app.get('/api/documents/duplicates', authMiddleware, (req, res) => {
+    const { type } = req.query;
+    
+    if (type === 'contract') {
+      db.all(`SELECT * FROM documents ORDER BY supplierName, property, totalPrice, uploadedAt DESC`, [], (err, rows) => {
+        if (err) return res.status(500).json({ error: err.message });
+        
+        const groups = {};
+        rows.forEach(row => {
+          if (!row.supplierName || row.supplierName === 'Unknown Supplier' || !row.property || row.property === 'Other') return;
+          const key = `${row.supplierName}|${row.property}|${row.totalPrice || 'none'}`;
+          if (!groups[key]) groups[key] = [];
+          groups[key].push(row);
+        });
+        
+        const duplicates = Object.values(groups).filter(g => g.length > 1);
+        res.json(duplicates);
+      });
+    } else {
+      db.all(`SELECT * FROM documents ORDER BY originalName, uploadedAt DESC`, [], (err, rows) => {
       if (err) return res.status(500).json({ error: err.message });
       
       const groups = {};
@@ -445,67 +447,66 @@ app.get('/api/documents/:id', authMiddleware, (req, res) => {
         res.json(row);
       });
     } else {
-        row.supersededBy = null;
-        res.json(row);
-      }
-    });
-  });
-
-  app.get('/api/documents/:id/supersedes', authMiddleware, (req, res) => {
-    db.all('SELECT id, originalName, projectNickname, uploadedAt, supplierName FROM documents WHERE supersededById = ?', [req.params.id], (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json(rows);
-    });
-  });
-
-  app.delete('/api/documents/:id', authMiddleware, (req, res) => {
-    db.get('SELECT filePath FROM documents WHERE id = ?', [req.params.id], (err, row) => {
-      if (err) return res.status(500).json({ error: err.message });
-      if (!row) return res.status(404).json({ error: 'Document not found' });
-      
-      if (fs.existsSync(row.filePath)) fs.unlinkSync(row.filePath);
-      
-      db.run('DELETE FROM documents WHERE id = ?', [req.params.id], function(err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ success: true });
-      });
-    });
-  });
-
-  app.post('/api/compare', authMiddleware, (req, res) => {
-    const { ids } = req.body;
-    if (!Array.isArray(ids) || ids.length < 2 || ids.length > 4) {
-      return res.status(400).json({ error: 'Select 2 to 4 documents to compare' });
+      row.supersededBy = null;
+      res.json(row);
     }
+  });
+});
 
-    const placeholders = ids.map(() => '?').join(',');
-    db.all(`SELECT * FROM documents WHERE id IN (${placeholders})`, ids, (err, rows) => {
+app.get('/api/documents/:id/supersedes', authMiddleware, (req, res) => {
+  db.all('SELECT id, originalName, projectNickname, uploadedAt, supplierName FROM documents WHERE supersededById = ?', [req.params.id], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+app.delete('/api/documents/:id', authMiddleware, (req, res) => {
+  db.get('SELECT filePath FROM documents WHERE id = ?', [req.params.id], (err, row) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!row) return res.status(404).json({ error: 'Document not found' });
+    
+    if (fs.existsSync(row.filePath)) fs.unlinkSync(row.filePath);
+    
+    db.run('DELETE FROM documents WHERE id = ?', [req.params.id], function(err) {
       if (err) return res.status(500).json({ error: err.message });
-      res.json(rows);
+      res.json({ success: true });
     });
   });
+});
 
-  app.get('/api/stats', authMiddleware, (req, res) => {
-    db.all('SELECT DISTINCT property FROM documents ORDER BY property', [], (err, properties) => {
+app.post('/api/compare', authMiddleware, (req, res) => {
+  const { ids } = req.body;
+  if (!Array.isArray(ids) || ids.length < 2 || ids.length > 4) {
+    return res.status(400).json({ error: 'Select 2 to 4 documents to compare' });
+  }
+
+  const placeholders = ids.map(() => '?').join(',');
+  db.all(`SELECT * FROM documents WHERE id IN (${placeholders})`, ids, (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+app.get('/api/stats', authMiddleware, (req, res) => {
+  db.all('SELECT DISTINCT property FROM documents ORDER BY property', [], (err, properties) => {
+    if (err) return res.status(500).json({ error: err.message });
+    db.all('SELECT DISTINCT serviceCategory FROM documents WHERE serviceCategory IS NOT NULL ORDER BY serviceCategory', [], (err, categories) => {
       if (err) return res.status(500).json({ error: err.message });
-      db.all('SELECT DISTINCT serviceCategory FROM documents WHERE serviceCategory IS NOT NULL ORDER BY serviceCategory', [], (err, categories) => {
+      db.get('SELECT COUNT(*) as total FROM documents', [], (err, count) => {
         if (err) return res.status(500).json({ error: err.message });
-        db.get('SELECT COUNT(*) as total FROM documents', [], (err, count) => {
+        db.get('SELECT COUNT(*) as active FROM documents WHERE isActive = 1', [], (err, activeCount) => {
           if (err) return res.status(500).json({ error: err.message });
-          db.get('SELECT COUNT(*) as active FROM documents WHERE isActive = 1', [], (err, activeCount) => {
+          db.get('SELECT COUNT(*) as expiring FROM documents WHERE expirationDate IS NOT NULL AND expirationDate >= date("now") AND julianday(expirationDate) - julianday(date("now")) <= 90', [], (err, expiringCount) => {
             if (err) return res.status(500).json({ error: err.message });
-            db.get('SELECT COUNT(*) as expiring FROM documents WHERE expirationDate IS NOT NULL AND expirationDate >= date("now") AND julianday(expirationDate) - julianday(date("now")) <= 90', [], (err, expiringCount) => {
+            db.get('SELECT COUNT(*) as duplicateCount FROM (SELECT originalName FROM documents GROUP BY originalName HAVING COUNT(*) > 1)', [], (err, dupCount) => {
               if (err) return res.status(500).json({ error: err.message });
-              db.get('SELECT COUNT(*) as duplicateCount FROM (SELECT originalName FROM documents GROUP BY originalName HAVING COUNT(*) > 1)', [], (err, dupCount) => {
-                if (err) return res.status(500).json({ error: err.message });
-                res.json({
-                  totalDocuments: count.total,
-                  activeDocuments: activeCount.active,
-                  expiringSoon: expiringCount.expiring,
-                  duplicateFiles: dupCount.duplicateCount || 0,
-                  properties: properties.map(p => p.property),
-                  serviceCategories: categories.map(c => c.serviceCategory)
-                });
+              res.json({
+                totalDocuments: count.total,
+                activeDocuments: activeCount.active,
+                expiringSoon: expiringCount.expiring,
+                duplicateFiles: dupCount.duplicateCount || 0,
+                properties: properties.map(p => p.property),
+                serviceCategories: categories.map(c => c.serviceCategory)
               });
             });
           });
@@ -513,12 +514,13 @@ app.get('/api/documents/:id', authMiddleware, (req, res) => {
       });
     });
   });
+});
 
-  const clientDist = path.join(__dirname, '..', 'client', 'dist');
-  if (fs.existsSync(clientDist)) {
-    app.use(express.static(clientDist));
-    app.get('*', (req, res) => {
-      if (!req.path.startsWith('/api') && !req.path.startsWith('/uploads')) {
+const clientDist = path.join(__dirname, '..', 'client', 'dist');
+if (fs.existsSync(clientDist)) {
+  app.use(express.static(clientDist));
+  app.get('*', (req, res) => {
+    if (!req.path.startsWith('/api') && !req.path.startsWith('/uploads')) {
         res.sendFile(path.join(clientDist, 'index.html'));
       }
     });
