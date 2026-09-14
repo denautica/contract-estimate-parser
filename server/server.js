@@ -116,14 +116,57 @@ const upload = multer({
 
 app.use('/uploads', authMiddleware, express.static(uploadsDir));
 
+async function ocrPdf(filePath) {
+  let pdf2pic;
+  try { pdf2pic = require('pdf2pic'); } catch (e) { pdf2pic = null; }
+  if (!pdf2pic) {
+    throw new Error('This PDF appears to be a scanned image with no extractable text. Please convert it to JPG/PNG and upload the image, or run: npm install pdf2pic (requires ImageMagick installed).');
+  }
+
+  const { fromPath } = pdf2pic;
+  const tempDir = path.join(uploadsDir, 'temp_' + uuidv4());
+  fs.mkdirSync(tempDir, { recursive: true });
+
+  try {
+    const convert = fromPath(filePath, {
+      density: 150,
+      saveFilename: 'page',
+      savePath: tempDir,
+      format: 'png',
+      width: 2000
+    });
+
+    const images = await convert.bulk(-1);
+    if (!images || images.length === 0) {
+      throw new Error('Could not convert PDF pages to images for OCR.');
+    }
+
+    let fullText = '';
+    for (const img of images) {
+      const imgPath = img.path || path.join(tempDir, img.name);
+      if (!fs.existsSync(imgPath)) continue;
+      const result = await Tesseract.recognize(imgPath, 'eng', { logger: () => {} });
+      fullText += result.data.text + '\n';
+      try { fs.unlinkSync(imgPath); } catch (e) {}
+    }
+    return fullText;
+  } finally {
+    try { fs.rmdirSync(tempDir); } catch (e) {}
+  }
+}
+
 async function extractText(filePath, fileType) {
   const ext = path.extname(filePath).toLowerCase();
   if (ext === '.pdf') {
     const buffer = fs.readFileSync(filePath);
     const data = await pdfParse(buffer);
-    return data.text;
+    if (data.text && data.text.trim().length > 20) {
+      return data.text;
+    }
+    // Fallback: OCR for scanned PDFs
+    return await ocrPdf(filePath);
   } else if (['.jpg', '.jpeg', '.png'].includes(ext)) {
-    const result = await Tesseract.recognize(filePath, 'eng', { logger: m => console.log(m) });
+    const result = await Tesseract.recognize(filePath, 'eng', { logger: () => {} });
     return result.data.text;
   }
   return '';
@@ -131,11 +174,21 @@ async function extractText(filePath, fileType) {
 
 async function processSingleFile(file, batchOptions = {}) {
   const rawText = await extractText(file.path, file.mimetype);
-  if (!rawText.trim()) {
+  if (!rawText || !rawText.trim()) {
     throw new Error('Could not extract text from document');
   }
 
-  const parsed = await parseDocument(rawText);
+  let parsed;
+  try {
+    parsed = await parseDocument(rawText);
+  } catch (parseErr) {
+    const msg = parseErr.message || '';
+    if (msg.includes('401') || msg.includes('Incorrect API key') || msg.includes('authentication')) {
+      throw new Error('OpenAI API key is invalid. Please check OPENAI_API_KEY in your .env file at https://platform.openai.com/account/api-keys');
+    }
+    throw new Error(`AI parsing failed: ${msg}`);
+  }
+
   const id = uuidv4();
   const now = new Date().toISOString();
   const keywords = Array.isArray(parsed.keywords) ? parsed.keywords.join(', ') : parsed.keywords;
@@ -392,66 +445,67 @@ app.get('/api/documents/:id', authMiddleware, (req, res) => {
         res.json(row);
       });
     } else {
-      row.supersededBy = null;
-      res.json(row);
-    }
-  });
-});
-
-app.get('/api/documents/:id/supersedes', authMiddleware, (req, res) => {
-  db.all('SELECT id, originalName, projectNickname, uploadedAt, supplierName FROM documents WHERE supersededById = ?', [req.params.id], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
-  });
-});
-
-app.delete('/api/documents/:id', authMiddleware, (req, res) => {
-  db.get('SELECT filePath FROM documents WHERE id = ?', [req.params.id], (err, row) => {
-    if (err) return res.status(500).json({ error: err.message });
-    if (!row) return res.status(404).json({ error: 'Document not found' });
-    
-    if (fs.existsSync(row.filePath)) fs.unlinkSync(row.filePath);
-    
-    db.run('DELETE FROM documents WHERE id = ?', [req.params.id], function(err) {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json({ success: true });
+        row.supersededBy = null;
+        res.json(row);
+      }
     });
   });
-});
 
-app.post('/api/compare', authMiddleware, (req, res) => {
-  const { ids } = req.body;
-  if (!Array.isArray(ids) || ids.length < 2 || ids.length > 4) {
-    return res.status(400).json({ error: 'Select 2 to 4 documents to compare' });
-  }
-
-  const placeholders = ids.map(() => '?').join(',');
-  db.all(`SELECT * FROM documents WHERE id IN (${placeholders})`, ids, (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
-  });
-});
-
-app.get('/api/stats', authMiddleware, (req, res) => {
-  db.all('SELECT DISTINCT property FROM documents ORDER BY property', [], (err, properties) => {
-    if (err) return res.status(500).json({ error: err.message });
-    db.all('SELECT DISTINCT serviceCategory FROM documents WHERE serviceCategory IS NOT NULL ORDER BY serviceCategory', [], (err, categories) => {
+  app.get('/api/documents/:id/supersedes', authMiddleware, (req, res) => {
+    db.all('SELECT id, originalName, projectNickname, uploadedAt, supplierName FROM documents WHERE supersededById = ?', [req.params.id], (err, rows) => {
       if (err) return res.status(500).json({ error: err.message });
-      db.get('SELECT COUNT(*) as total FROM documents', [], (err, count) => {
+      res.json(rows);
+    });
+  });
+
+  app.delete('/api/documents/:id', authMiddleware, (req, res) => {
+    db.get('SELECT filePath FROM documents WHERE id = ?', [req.params.id], (err, row) => {
+      if (err) return res.status(500).json({ error: err.message });
+      if (!row) return res.status(404).json({ error: 'Document not found' });
+      
+      if (fs.existsSync(row.filePath)) fs.unlinkSync(row.filePath);
+      
+      db.run('DELETE FROM documents WHERE id = ?', [req.params.id], function(err) {
         if (err) return res.status(500).json({ error: err.message });
-        db.get('SELECT COUNT(*) as active FROM documents WHERE isActive = 1', [], (err, activeCount) => {
+        res.json({ success: true });
+      });
+    });
+  });
+
+  app.post('/api/compare', authMiddleware, (req, res) => {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length < 2 || ids.length > 4) {
+      return res.status(400).json({ error: 'Select 2 to 4 documents to compare' });
+    }
+
+    const placeholders = ids.map(() => '?').join(',');
+    db.all(`SELECT * FROM documents WHERE id IN (${placeholders})`, ids, (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json(rows);
+    });
+  });
+
+  app.get('/api/stats', authMiddleware, (req, res) => {
+    db.all('SELECT DISTINCT property FROM documents ORDER BY property', [], (err, properties) => {
+      if (err) return res.status(500).json({ error: err.message });
+      db.all('SELECT DISTINCT serviceCategory FROM documents WHERE serviceCategory IS NOT NULL ORDER BY serviceCategory', [], (err, categories) => {
+        if (err) return res.status(500).json({ error: err.message });
+        db.get('SELECT COUNT(*) as total FROM documents', [], (err, count) => {
           if (err) return res.status(500).json({ error: err.message });
-          db.get('SELECT COUNT(*) as expiring FROM documents WHERE expirationDate IS NOT NULL AND expirationDate >= date("now") AND julianday(expirationDate) - julianday(date("now")) <= 90', [], (err, expiringCount) => {
+          db.get('SELECT COUNT(*) as active FROM documents WHERE isActive = 1', [], (err, activeCount) => {
             if (err) return res.status(500).json({ error: err.message });
-            db.get('SELECT COUNT(*) as duplicateCount FROM (SELECT originalName FROM documents GROUP BY originalName HAVING COUNT(*) > 1)', [], (err, dupCount) => {
+            db.get('SELECT COUNT(*) as expiring FROM documents WHERE expirationDate IS NOT NULL AND expirationDate >= date("now") AND julianday(expirationDate) - julianday(date("now")) <= 90', [], (err, expiringCount) => {
               if (err) return res.status(500).json({ error: err.message });
-              res.json({
-                totalDocuments: count.total,
-                activeDocuments: activeCount.active,
-                expiringSoon: expiringCount.expiring,
-                duplicateFiles: dupCount.duplicateCount || 0,
-                properties: properties.map(p => p.property),
-                serviceCategories: categories.map(c => c.serviceCategory)
+              db.get('SELECT COUNT(*) as duplicateCount FROM (SELECT originalName FROM documents GROUP BY originalName HAVING COUNT(*) > 1)', [], (err, dupCount) => {
+                if (err) return res.status(500).json({ error: err.message });
+                res.json({
+                  totalDocuments: count.total,
+                  activeDocuments: activeCount.active,
+                  expiringSoon: expiringCount.expiring,
+                  duplicateFiles: dupCount.duplicateCount || 0,
+                  properties: properties.map(p => p.property),
+                  serviceCategories: categories.map(c => c.serviceCategory)
+                });
               });
             });
           });
@@ -459,19 +513,18 @@ app.get('/api/stats', authMiddleware, (req, res) => {
       });
     });
   });
-});
 
-const clientDist = path.join(__dirname, '..', 'client', 'dist');
-if (fs.existsSync(clientDist)) {
-  app.use(express.static(clientDist));
-  app.get('*', (req, res) => {
-    if (!req.path.startsWith('/api') && !req.path.startsWith('/uploads')) {
-      res.sendFile(path.join(clientDist, 'index.html'));
-    }
+  const clientDist = path.join(__dirname, '..', 'client', 'dist');
+  if (fs.existsSync(clientDist)) {
+    app.use(express.static(clientDist));
+    app.get('*', (req, res) => {
+      if (!req.path.startsWith('/api') && !req.path.startsWith('/uploads')) {
+        res.sendFile(path.join(clientDist, 'index.html'));
+      }
+    });
+  }
+
+  app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Default admin user: ${process.env.ADMIN_USER || 'admin'}`);
   });
-}
-
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-  console.log(`Default admin user: ${process.env.ADMIN_USER || 'admin'}`);
-});
