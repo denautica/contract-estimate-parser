@@ -115,7 +115,6 @@ const upload = multer({
 });
 
 // Serve uploads without auth middleware - filenames are UUIDs (unguessable)
-// The app login page is still required to access the app and discover filenames
 app.use('/uploads', express.static(uploadsDir));
 
 async function ocrPdf(filePath) {
@@ -165,7 +164,6 @@ async function extractText(filePath, fileType) {
     if (data.text && data.text.trim().length > 20) {
       return data.text;
     }
-    // Fallback: OCR for scanned PDFs
     return await ocrPdf(filePath);
   } else if (['.jpg', '.jpeg', '.png'].includes(ext)) {
     const result = await Tesseract.recognize(filePath, 'eng', { logger: () => {} });
@@ -320,94 +318,116 @@ app.put('/api/documents/:id', authMiddleware, (req, res) => {
 });
 
 app.put('/api/documents/bulk/status', authMiddleware, (req, res) => {
-  const { ids, isActive } = req.body;
+  const { ids, isActive, projectNickname } = req.body;
   if (!Array.isArray(ids) || ids.length === 0) {
     return res.status(400).json({ error: 'No document IDs provided' });
   }
+
+  const fields = [];
+  const values = [];
+
+  if (isActive !== undefined) {
+    fields.push('isActive = ?');
+    values.push(isActive ? 1 : 0);
+  }
+  if (projectNickname !== undefined) {
+    fields.push('projectNickname = ?');
+    values.push(projectNickname);
+  }
+
+  if (fields.length === 0) {
+    return res.status(400).json({ error: 'No fields to update' });
+  }
+
   const placeholders = ids.map(() => '?').join(',');
-  const newStatus = isActive ? 1 : 0;
-  db.run(`UPDATE documents SET isActive = ? WHERE id IN (${placeholders})`, [newStatus, ...ids], function(err) {
+  values.push(...ids);
+
+  db.run(`UPDATE documents SET ${fields.join(', ')} WHERE id IN (${placeholders})`, values, function(err) {
     if (err) {
       console.error('Bulk update error:', err);
-        return res.status(500).json({ error: err.message });
-      }
-      res.json({ updated: this.changes });
-    });
+      return res.status(500).json({ error: err.message });
+    }
+    res.json({ updated: this.changes });
   });
+});
 
-  app.get('/api/documents', authMiddleware, (req, res) => {
-    const { search, property, serviceCategory, recurring, supplierName, isActive } = req.query;
-    let sql = 'SELECT * FROM documents WHERE 1=1';
-    const params = [];
+app.get('/api/documents', authMiddleware, (req, res) => {
+  const { search, property, serviceCategory, recurring, supplierName, isActive, projectNickname } = req.query;
+  let sql = 'SELECT * FROM documents WHERE 1=1';
+  const params = [];
 
-    if (search) {
-      sql += ` AND (
-        originalName LIKE ? OR supplierName LIKE ? OR description LIKE ? OR 
-        keywords LIKE ? OR serviceCategory LIKE ? OR rawText LIKE ? OR projectNickname LIKE ?
-      )`;
-      const like = `%${search}%`;
-      params.push(like, like, like, like, like, like, like);
-    }
-    if (property) {
-      sql += ' AND property = ?';
-      params.push(property);
-    }
-    if (serviceCategory) {
-      sql += ' AND serviceCategory = ?';
-      params.push(serviceCategory);
-    }
-    if (recurring !== undefined) {
-      sql += ' AND recurring = ?';
-      params.push(recurring === 'true' ? 1 : 0);
-    }
-    if (supplierName) {
-      sql += ' AND supplierName LIKE ?';
-      params.push(`%${supplierName}%`);
-    }
-    if (isActive !== undefined) {
-      if (isActive === 'true') {
-        sql += ' AND isActive = 1';
-      } else {
-        sql += ' AND (isActive = 0 OR isActive IS NULL)';
-      }
-    }
-
-    sql += ' ORDER BY uploadedAt DESC';
-
-    db.all(sql, params, (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json(rows);
-    });
-  });
-
-  app.get('/api/documents/duplicates', authMiddleware, (req, res) => {
-    const { type } = req.query;
-    
-    if (type === 'contract') {
-      db.all(`SELECT * FROM documents ORDER BY supplierName, property, totalPrice, uploadedAt DESC`, [], (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
-        
-        const groups = {};
-        rows.forEach(row => {
-          if (!row.supplierName || row.supplierName === 'Unknown Supplier' || !row.property || row.property === 'Other') return;
-          const key = `${row.supplierName}|${row.property}|${row.totalPrice || 'none'}`;
-          if (!groups[key]) groups[key] = [];
-          groups[key].push(row);
-        });
-        
-        const duplicates = Object.values(groups).filter(g => g.length > 1);
-        res.json(duplicates);
-      });
+  if (search) {
+    sql += ` AND (
+      originalName LIKE ? OR supplierName LIKE ? OR description LIKE ? OR
+      keywords LIKE ? OR serviceCategory LIKE ? OR rawText LIKE ? OR projectNickname LIKE ?
+    )`;
+    const like = `%${search}%`;
+    params.push(like, like, like, like, like, like, like);
+  }
+  if (property) {
+    sql += ' AND property = ?';
+    params.push(property);
+  }
+  if (serviceCategory) {
+    sql += ' AND serviceCategory = ?';
+    params.push(serviceCategory);
+  }
+  if (recurring !== undefined) {
+    sql += ' AND recurring = ?';
+    params.push(recurring === 'true' ? 1 : 0);
+  }
+  if (supplierName) {
+    sql += ' AND supplierName LIKE ?';
+    params.push(`%${supplierName}%`);
+  }
+  if (isActive !== undefined) {
+    if (isActive === 'true') {
+      sql += ' AND isActive = 1';
     } else {
-      db.all(`SELECT * FROM documents ORDER BY originalName, uploadedAt DESC`, [], (err, rows) => {
+      sql += ' AND (isActive = 0 OR isActive IS NULL)';
+    }
+  }
+  if (projectNickname) {
+    sql += ' AND projectNickname LIKE ?';
+    params.push(`%${projectNickname}%`);
+  }
+
+  sql += ' ORDER BY uploadedAt DESC';
+
+  db.all(sql, params, (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+app.get('/api/documents/duplicates', authMiddleware, (req, res) => {
+  const { type } = req.query;
+
+  if (type === 'contract') {
+    db.all(`SELECT * FROM documents ORDER BY supplierName, property, totalPrice, uploadedAt DESC`, [], (err, rows) => {
       if (err) return res.status(500).json({ error: err.message });
-      
+
+      const groups = {};
+      rows.forEach(row => {
+        if (!row.supplierName || row.supplierName === 'Unknown Supplier' || !row.property || row.property === 'Other') return;
+        const key = `${row.supplierName}|${row.property}|${row.totalPrice || 'none'}`;
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(row);
+      });
+
+      const duplicates = Object.values(groups).filter(g => g.length > 1);
+      res.json(duplicates);
+    });
+  } else {
+    db.all(`SELECT * FROM documents ORDER BY originalName, uploadedAt DESC`, [], (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+
       const groups = {};
       rows.forEach(row => {
         if (!groups[row.originalName]) groups[row.originalName] = [];
         groups[row.originalName].push(row);
       });
-      
+
       const duplicates = Object.values(groups).filter(g => g.length > 1);
       res.json(duplicates);
     });
@@ -417,8 +437,8 @@ app.put('/api/documents/bulk/status', authMiddleware, (req, res) => {
 app.get('/api/documents/expiring', authMiddleware, (req, res) => {
   const now = new Date().toISOString().split('T')[0];
   const sql = `
-    SELECT *, 
-      CASE 
+    SELECT *,
+      CASE
         WHEN expirationDate < ? THEN 'expired'
         WHEN julianday(expirationDate) - julianday(?) <= 30 THEN 'critical'
         WHEN julianday(expirationDate) - julianday(?) <= 60 THEN 'warning'
@@ -439,7 +459,7 @@ app.get('/api/documents/:id', authMiddleware, (req, res) => {
   db.get('SELECT * FROM documents WHERE id = ?', [req.params.id], (err, row) => {
     if (err) return res.status(500).json({ error: err.message });
     if (!row) return res.status(404).json({ error: 'Document not found' });
-    
+
     if (row.supersededById) {
       db.get('SELECT id, originalName, projectNickname FROM documents WHERE id = ?', [row.supersededById], (err, supRow) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -464,9 +484,9 @@ app.delete('/api/documents/:id', authMiddleware, (req, res) => {
   db.get('SELECT filePath FROM documents WHERE id = ?', [req.params.id], (err, row) => {
     if (err) return res.status(500).json({ error: err.message });
     if (!row) return res.status(404).json({ error: 'Document not found' });
-    
+
     if (fs.existsSync(row.filePath)) fs.unlinkSync(row.filePath);
-    
+
     db.run('DELETE FROM documents WHERE id = ?', [req.params.id], function(err) {
       if (err) return res.status(500).json({ error: err.message });
       res.json({ success: true });
@@ -521,12 +541,12 @@ if (fs.existsSync(clientDist)) {
   app.use(express.static(clientDist));
   app.get('*', (req, res) => {
     if (!req.path.startsWith('/api') && !req.path.startsWith('/uploads')) {
-        res.sendFile(path.join(clientDist, 'index.html'));
-      }
-    });
-  }
-
-  app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-    console.log(`Default admin user: ${process.env.ADMIN_USER || 'admin'}`);
+      res.sendFile(path.join(clientDist, 'index.html'));
+    }
   });
+}
+
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Default admin user: ${process.env.ADMIN_USER || 'admin'}`);
+});
