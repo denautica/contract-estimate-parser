@@ -3,6 +3,11 @@ import { X, Upload, FileText, Loader, Trash2, Tag, Activity } from 'lucide-react
 
 const API_URL = '/api';
 
+function getAuthHeaders() {
+  const token = localStorage.getItem('token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export default function UploadModal({ onClose, onSuccess }) {
   const [files, setFiles] = useState([]);
   const [dragOver, setDragOver] = useState(false);
@@ -53,8 +58,15 @@ export default function UploadModal({ onClose, onSuccess }) {
     try {
       const res = await fetch(`${API_URL}/upload`, {
         method: 'POST',
+        headers: getAuthHeaders(),
         body: formData
       });
+      if (res.status === 401) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        window.location.reload();
+        return;
+      }
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Upload failed');
       
