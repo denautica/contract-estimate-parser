@@ -16,7 +16,7 @@ Fields to extract:
 - estimateDate: Date of estimate or contract (ISO 8601 format or null)
 - supplierName: Company or vendor name (string or null)
 - property: Must be exactly one of: "Canyon View", "Rockpoint", "Boulder Canyon", or "Other". Infer from document content if possible, otherwise use "Other".
-- description: A concise 2-3 sentence AI-generated summary of what the document is about (string or null)
+- description: A concise 2-3 sentence summary describing what the contract or estimate covers. Write it as a direct description — DO NOT start with "This document is", "This is a", or similar meta-phrasing. Just state what the agreement covers. (string or null)
 - keywords: Array of 3-8 relevant keywords/tags (array of strings)
 - serviceCategory: The type of service (e.g., "Pool Maintenance", "Landscaping", "HVAC", "Plumbing", "Electrical", "Renovation", "Cleaning", "Security", "General Contracting", etc.) (string or null)
 - totalPrice: Total dollar amount as a number (number or null)
@@ -31,7 +31,7 @@ If a field cannot be found, use null. For keywords, return an array of strings. 
 Document text:
 """
 ${text.substring(0, 12000)}
-"""`;
+"""`;}
 
   const response = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
