@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { FileText, Upload, Search, Filter, BarChart3, Trash2, Eye, CheckSquare, Square, X, Activity, AlertTriangle, Clock, CheckCircle, LogOut, User, Copy } from 'lucide-react';
+import { FileText, Upload, Search, Filter, BarChart3, Trash2, Eye, CheckSquare, Square, X, Activity, AlertTriangle, Clock, CheckCircle, LogOut, User, Copy, ChevronDown, ChevronRight, Tag } from 'lucide-react';
 import Login from './components/Login';
 import UploadModal from './components/UploadModal';
 import DocumentDetail from './components/DocumentDetail';
@@ -23,7 +23,7 @@ export default function App() {
   const [expiringDocs, setExpiringDocs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [filters, setFilters] = useState({ property: '', serviceCategory: '', recurring: '', isActive: '' });
+  const [filters, setFilters] = useState({ property: '', serviceCategory: '', recurring: '', isActive: '', projectNickname: '' });
   const [selectedDocs, setSelectedDocs] = useState(new Set());
   const [showUpload, setShowUpload] = useState(false);
   const [detailDoc, setDetailDoc] = useState(null);
@@ -31,6 +31,8 @@ export default function App() {
   const [bulkMode, setBulkMode] = useState(false);
   const [bulkUpdating, setBulkUpdating] = useState(false);
   const [showDuplicates, setShowDuplicates] = useState(false);
+  const [expiringCollapsed, setExpiringCollapsed] = useState(false);
+  const [bulkNickname, setBulkNickname] = useState('');
 
   const fetchWithAuth = useCallback(async (url, options = {}) => {
     const res = await fetch(url, {
@@ -57,7 +59,8 @@ export default function App() {
     if (filters.serviceCategory) params.append('serviceCategory', filters.serviceCategory);
     if (filters.recurring) params.append('recurring', filters.recurring === 'yes' ? 'true' : 'false');
     if (filters.isActive) params.append('isActive', filters.isActive === 'yes' ? 'true' : 'false');
-    
+    if (filters.projectNickname) params.append('projectNickname', filters.projectNickname);
+
     try {
       const res = await fetchWithAuth(`${API_URL}/documents?${params}`);
       const data = await res.json();
@@ -112,6 +115,7 @@ export default function App() {
   const clearBulk = () => {
     setSelectedDocs(new Set());
     setBulkMode(false);
+    setBulkNickname('');
   };
 
   const bulkSetStatus = async (isActive) => {
@@ -128,6 +132,7 @@ export default function App() {
       if (!res.ok) throw new Error(data.error || 'Bulk update failed');
       setSelectedDocs(new Set());
       setBulkMode(false);
+      setBulkNickname('');
       fetchDocs();
       fetchStats();
     } catch (err) {
@@ -135,6 +140,53 @@ export default function App() {
     } finally {
       setBulkUpdating(false);
     }
+  };
+
+  const bulkSetNickname = async () => {
+    if (!bulkNickname.trim() || selectedDocs.size === 0) return;
+    setBulkUpdating(true);
+    const ids = Array.from(selectedDocs);
+    try {
+      const res = await fetchWithAuth(`${API_URL}/documents/bulk/status`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids, projectNickname: bulkNickname.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Bulk update failed');
+      setSelectedDocs(new Set());
+      setBulkMode(false);
+      setBulkNickname('');
+      fetchDocs();
+      fetchStats();
+      fetchExpiring();
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setBulkUpdating(false);
+    }
+  };
+
+  const bulkDelete = async () => {
+    if (!confirm(`Permanently delete ${selectedDocs.size} selected documents? This cannot be undone.`)) return;
+    setBulkUpdating(true);
+    const ids = Array.from(selectedDocs);
+    let deleted = 0;
+    for (const id of ids) {
+      try {
+        const res = await fetchWithAuth(`${API_URL}/documents/${id}`, { method: 'DELETE' });
+        if (res.ok) deleted++;
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    setBulkUpdating(false);
+    setSelectedDocs(new Set());
+    setBulkMode(false);
+    setBulkNickname('');
+    fetchDocs();
+    fetchStats();
+    fetchExpiring();
   };
 
   const handleDelete = async (id) => {
@@ -223,7 +275,7 @@ export default function App() {
           <div>
             <h1 style={{ fontSize: 22, letterSpacing: '-0.02em', lineHeight: 1.2 }}>Contract & Estimate Parser</h1>
             <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
-              {stats.activeDocuments} active / {stats.totalDocuments} total documents
+              {stats.activeDocuments} executed / {stats.totalDocuments} total documents
               {stats.duplicateFiles > 0 && (
                 <span style={{ marginLeft: 8, color: 'var(--amber)', fontWeight: 600 }}>
                   · {stats.duplicateFiles} duplicate file names
@@ -262,6 +314,7 @@ export default function App() {
             onClick={() => {
               setBulkMode(!bulkMode);
               setSelectedDocs(new Set());
+              setBulkNickname('');
             }}
             style={{
               padding: '10px 18px', background: bulkMode ? 'var(--amber-light)' : 'var(--warm-white)',
@@ -346,12 +399,25 @@ export default function App() {
                 style={{ width: '100%', marginTop: 6, padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 14, background: 'white' }}
               >
                 <option value="">All</option>
-                <option value="yes">Active</option>
+                <option value="yes">Executed</option>
                 <option value="no">Inactive</option>
               </select>
             </div>
 
-            <button onClick={() => setFilters({ property: '', serviceCategory: '', recurring: '', isActive: '' })} style={{
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Tag size={12} /> Project Nickname
+              </label>
+              <input
+                type="text"
+                value={filters.projectNickname}
+                onChange={e => setFilters(f => ({ ...f, projectNickname: e.target.value }))}
+                placeholder="Filter by nickname..."
+                style={{ width: '100%', marginTop: 6, padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 14, background: 'white' }}
+              />
+            </div>
+
+            <button onClick={() => setFilters({ property: '', serviceCategory: '', recurring: '', isActive: '', projectNickname: '' })} style={{
               width: '100%', padding: '8px', background: 'transparent', border: '1px solid var(--border)',
               borderRadius: 'var(--radius)', cursor: 'pointer', fontSize: 13, color: 'var(--text-secondary)'
             }}>
@@ -364,7 +430,11 @@ export default function App() {
           {/* Expiring Dashboard */}
           {expiringDocs.length > 0 && (
             <div style={{ marginBottom: 24 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <div
+                onClick={() => setExpiringCollapsed(c => !c)}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, cursor: 'pointer', userSelect: 'none' }}
+              >
+                {expiringCollapsed ? <ChevronRight size={18} color="var(--amber)" /> : <ChevronDown size={18} color="var(--amber)" />}
                 <AlertTriangle size={18} color="var(--amber)" />
                 <h2 style={{ fontSize: 16, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--charcoal)' }}>
                   Expiring & Expired Contracts
@@ -373,45 +443,47 @@ export default function App() {
                   ({stats.expiringSoon} expiring in 90 days)
                 </span>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 12 }}>
-                {expiringDocs.map(doc => (
-                  <div
-                    key={doc.id}
-                    onClick={() => setDetailDoc(doc)}
-                    style={{
-                      padding: 14, borderRadius: 'var(--radius)', border: '1px solid var(--border)',
-                      background: urgencyBg(doc.urgency), cursor: 'pointer',
-                      display: 'flex', alignItems: 'center', gap: 12,
-                      transition: 'box-shadow 0.2s',
-                      borderLeft: `4px solid ${urgencyColor(doc.urgency)}`
-                    }}
-                    onMouseEnter={e => e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.08)'}
-                    onMouseLeave={e => e.currentTarget.style.boxShadow = 'none'}
-                  >
-                    <div style={{
-                      width: 36, height: 36, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      background: urgencyColor(doc.urgency), flexShrink: 0
-                    }}>
-                      {doc.urgency === 'expired' ? <AlertTriangle size={18} color="white" /> : <Clock size={18} color="white" />}
+              {!expiringCollapsed && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 12 }}>
+                  {expiringDocs.map(doc => (
+                    <div
+                      key={doc.id}
+                      onClick={() => setDetailDoc(doc)}
+                      style={{
+                        padding: 14, borderRadius: 'var(--radius)', border: '1px solid var(--border)',
+                        background: urgencyBg(doc.urgency), cursor: 'pointer',
+                        display: 'flex', alignItems: 'center', gap: 12,
+                        transition: 'box-shadow 0.2s',
+                        borderLeft: `4px solid ${urgencyColor(doc.urgency)}`
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.08)'}
+                      onMouseLeave={e => e.currentTarget.style.boxShadow = 'none'}
+                    >
+                      <div style={{
+                        width: 36, height: 36, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        background: urgencyColor(doc.urgency), flexShrink: 0
+                      }}>
+                        {doc.urgency === 'expired' ? <AlertTriangle size={18} color="white" /> : <Clock size={18} color="white" />}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {doc.projectNickname || doc.originalName}
+                        </p>
+                        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                          {doc.supplierName} · Expires {formatDate(doc.expirationDate)}
+                        </p>
+                      </div>
+                      <span style={{
+                        fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em',
+                        padding: '2px 8px', borderRadius: 10, background: 'white', color: urgencyColor(doc.urgency),
+                        border: `1px solid ${urgencyColor(doc.urgency)}`, flexShrink: 0
+                      }}>
+                        {urgencyLabel(doc.urgency)}
+                      </span>
                     </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <p style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {doc.projectNickname || doc.originalName}
-                      </p>
-                      <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
-                        {doc.supplierName} · Expires {formatDate(doc.expirationDate)}
-                      </p>
-                    </div>
-                    <span style={{
-                      fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em',
-                      padding: '2px 8px', borderRadius: 10, background: 'white', color: urgencyColor(doc.urgency),
-                      border: `1px solid ${urgencyColor(doc.urgency)}`, flexShrink: 0
-                    }}>
-                      {urgencyLabel(doc.urgency)}
-                    </span>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -428,23 +500,41 @@ export default function App() {
                   {selectedDocs.size} selected
                 </span>
               </div>
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input
+                  type="text"
+                  value={bulkNickname}
+                  onChange={e => setBulkNickname(e.target.value)}
+                  placeholder="Project nickname..."
+                  style={{ padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: 13, width: 160 }}
+                />
+                <button
+                  onClick={bulkSetNickname}
+                  disabled={bulkUpdating || !bulkNickname.trim()}
+                  style={{
+                    padding: '6px 14px', background: '#2d5a8a', color: 'white', border: 'none',
+                    borderRadius: 'var(--radius)', cursor: (bulkUpdating || !bulkNickname.trim()) ? 'not-allowed' : 'pointer',
+                    fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6
+                  }}
+                >
+                  <Tag size={14} /> {bulkUpdating ? 'Updating...' : 'Set Nickname'}
+                </button>
                 <button
                   onClick={() => bulkSetStatus(true)}
                   disabled={bulkUpdating}
                   style={{
-                    padding: '8px 14px', background: '#2d5a2d', color: 'white', border: 'none',
+                    padding: '6px 14px', background: '#2d5a2d', color: 'white', border: 'none',
                     borderRadius: 'var(--radius)', cursor: bulkUpdating ? 'not-allowed' : 'pointer',
                     fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6
                   }}
                 >
-                  <CheckCircle size={14} /> {bulkUpdating ? 'Updating...' : 'Mark Active'}
+                  <CheckCircle size={14} /> {bulkUpdating ? 'Updating...' : 'Mark Executed'}
                 </button>
                 <button
                   onClick={() => bulkSetStatus(false)}
                   disabled={bulkUpdating}
                   style={{
-                    padding: '8px 14px', background: '#8a2d2d', color: 'white', border: 'none',
+                    padding: '6px 14px', background: '#8a2d2d', color: 'white', border: 'none',
                     borderRadius: 'var(--radius)', cursor: bulkUpdating ? 'not-allowed' : 'pointer',
                     fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6
                   }}
@@ -452,9 +542,20 @@ export default function App() {
                   <X size={14} /> {bulkUpdating ? 'Updating...' : 'Mark Inactive'}
                 </button>
                 <button
+                  onClick={bulkDelete}
+                  disabled={bulkUpdating}
+                  style={{
+                    padding: '6px 14px', background: '#5a1a1a', color: 'white', border: 'none',
+                    borderRadius: 'var(--radius)', cursor: bulkUpdating ? 'not-allowed' : 'pointer',
+                    fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6
+                  }}
+                >
+                  <Trash2 size={14} /> {bulkUpdating ? 'Deleting...' : 'Delete'}
+                </button>
+                <button
                   onClick={clearBulk}
                   style={{
-                    padding: '8px 14px', background: 'transparent', color: 'var(--text-secondary)',
+                    padding: '6px 14px', background: 'transparent', color: 'var(--text-secondary)',
                     border: '1px solid var(--border)', borderRadius: 'var(--radius)',
                     cursor: 'pointer', fontSize: 13, fontWeight: 600
                   }}
@@ -519,7 +620,7 @@ export default function App() {
                         )}
                         {doc.isActive === 1 && (
                           <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', padding: '2px 8px', borderRadius: 10, background: '#e8f0e8', color: '#2d5a2d' }}>
-                            Active
+                            Executed
                           </span>
                         )}
                         {doc.supersededById && (
