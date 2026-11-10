@@ -1,11 +1,15 @@
 const OpenAI = require('openai');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-async function parseDocument(text) {
+// text: extracted document text. pdfPath (optional): for scanned PDFs with no
+// text layer, the PDF itself is sent to OpenAI, which reads the pages directly.
+async function parseDocument(text, { pdfPath } = {}) {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error('OPENAI_API_KEY not configured');
   }
@@ -26,18 +30,33 @@ Fields to extract:
 - expirationDate: Contract or estimate expiration date (ISO 8601 format or null)
 - cancellationTerms: Cancellation terms or notice period (string or null)
 
-If a field cannot be found, use null. For keywords, return an array of strings. For recurring, return true or false. For totalPrice and intervalAmount, return numbers without currency symbols. For dates, return ISO 8601 format (YYYY-MM-DD) or null.
+${pdfPath ? `- extractedText: A plain-text transcription of all readable text in the document (string)
 
-Document text:
+` : ''}If a field cannot be found, use null. For keywords, return an array of strings. For recurring, return true or false. For totalPrice and intervalAmount, return numbers without currency symbols. For dates, return ISO 8601 format (YYYY-MM-DD) or null.
+
+${pdfPath ? 'The document is the attached PDF.' : `Document text:
 """
 ${text.substring(0, 12000)}
-"""`;
+"""`}`;
+
+  const userContent = pdfPath
+    ? [
+        {
+          type: 'file',
+          file: {
+            filename: path.basename(pdfPath),
+            file_data: `data:application/pdf;base64,${fs.readFileSync(pdfPath).toString('base64')}`
+          }
+        },
+        { type: 'text', text: prompt }
+      ]
+    : prompt;
 
   const response = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
     messages: [
       { role: 'system', content: 'You extract structured data from property management documents and return only valid JSON.' },
-      { role: 'user', content: prompt }
+      { role: 'user', content: userContent }
     ],
     temperature: 0.1
   });

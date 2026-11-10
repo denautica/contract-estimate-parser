@@ -73,7 +73,8 @@ export default function UploadModal({ onClose, onSuccess }) {
       if (data.totalProcessed > 0) {
         onSuccess();
       } else {
-        setError('No files were successfully processed. Check console for details.');
+        const reasons = (data.errors || []).map(e => `${e.file}: ${e.error}`).join(' | ');
+        setError(reasons || 'No files were successfully processed.');
         setUploading(false);
       }
     } catch (err) {

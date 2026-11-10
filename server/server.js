@@ -117,45 +117,6 @@ const upload = multer({
 // Serve uploads without auth middleware - filenames are UUIDs (unguessable)
 app.use('/uploads', express.static(uploadsDir));
 
-async function ocrPdf(filePath) {
-  let pdf2pic;
-  try { pdf2pic = require('pdf2pic'); } catch (e) { pdf2pic = null; }
-  if (!pdf2pic) {
-    throw new Error('This PDF appears to be a scanned image with no extractable text. Please convert it to JPG/PNG and upload the image, or run: npm install pdf2pic (requires ImageMagick installed).');
-  }
-
-  const { fromPath } = pdf2pic;
-  const tempDir = path.join(uploadsDir, 'temp_' + uuidv4());
-  fs.mkdirSync(tempDir, { recursive: true });
-
-  try {
-    const convert = fromPath(filePath, {
-      density: 150,
-      saveFilename: 'page',
-      savePath: tempDir,
-      format: 'png',
-      width: 2000
-    });
-
-    const images = await convert.bulk(-1);
-    if (!images || images.length === 0) {
-      throw new Error('Could not convert PDF pages to images for OCR.');
-    }
-
-    let fullText = '';
-    for (const img of images) {
-      const imgPath = img.path || path.join(tempDir, img.name);
-      if (!fs.existsSync(imgPath)) continue;
-      const result = await Tesseract.recognize(imgPath, 'eng', { logger: () => {} });
-      fullText += result.data.text + '\n';
-      try { fs.unlinkSync(imgPath); } catch (e) {}
-    }
-    return fullText;
-  } finally {
-    try { fs.rmdirSync(tempDir); } catch (e) {}
-  }
-}
-
 async function extractText(filePath, fileType) {
   const ext = path.extname(filePath).toLowerCase();
   if (ext === '.pdf') {
@@ -164,7 +125,8 @@ async function extractText(filePath, fileType) {
     if (data.text && data.text.trim().length > 20) {
       return data.text;
     }
-    return await ocrPdf(filePath);
+    // Scanned PDF with no text layer: return null so the PDF itself is sent to OpenAI
+    return null;
   } else if (['.jpg', '.jpeg', '.png'].includes(ext)) {
     const result = await Tesseract.recognize(filePath, 'eng', { logger: () => {} });
     return result.data.text;
@@ -173,14 +135,21 @@ async function extractText(filePath, fileType) {
 }
 
 async function processSingleFile(file, batchOptions = {}) {
-  const rawText = await extractText(file.path, file.mimetype);
-  if (!rawText || !rawText.trim()) {
+  let rawText = await extractText(file.path, file.mimetype);
+  const isScannedPdf = rawText === null;
+  if (!isScannedPdf && (!rawText || !rawText.trim())) {
     throw new Error('Could not extract text from document');
   }
 
   let parsed;
   try {
-    parsed = await parseDocument(rawText);
+    parsed = isScannedPdf
+      ? await parseDocument('', { pdfPath: file.path })
+      : await parseDocument(rawText);
+    if (isScannedPdf) {
+      rawText = parsed.extractedText || '';
+      delete parsed.extractedText;
+    }
   } catch (parseErr) {
     const msg = parseErr.message || '';
     if (msg.includes('401') || msg.includes('Incorrect API key') || msg.includes('authentication')) {
